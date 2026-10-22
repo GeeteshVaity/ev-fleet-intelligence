@@ -24,7 +24,9 @@ class PlatformControllerTest {
     @BeforeEach
     void setUp() {
         service = mock(VehicleService.class);
-        mockMvc = MockMvcBuilders.standaloneSetup(new VehicleController(service)).build();
+        mockMvc = MockMvcBuilders.standaloneSetup(new VehicleController(service))
+                .setControllerAdvice(new com.evfleet.backend.controller.ApiExceptionHandler())
+                .build();
     }
 
     @Test
@@ -71,5 +73,19 @@ class PlatformControllerTest {
         mockMvc.perform(delete("/api/vehicles/7").header("X-User-Sub", "user-1"))
                 .andExpect(status().isNoContent());
         verify(service).delete("user-1", 7L);
+    }
+
+    @Test
+    void rejectsVehicleWithMissingRequiredFields() throws Exception {
+        mockMvc.perform(post("/api/vehicles")
+                        .header("X-User-Sub", "user-1")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error").value("Bad Request"))
+                .andExpect(jsonPath("$.message").value("Validation failed"))
+                .andExpect(jsonPath("$.details.vehicleType").exists())
+                .andExpect(jsonPath("$.details.model").exists());
+        verifyNoInteractions(service);
     }
 }
