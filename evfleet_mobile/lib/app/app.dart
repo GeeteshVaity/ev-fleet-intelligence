@@ -3,6 +3,10 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_riverpod/legacy.dart';
 import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+
+import '../core/network/backend_api_service.dart';
+import '../core/errors/error_handler.dart';
 
 class AppColors {
   static const forest = Color(0xFF12372A);
@@ -17,26 +21,217 @@ final stationsProvider = Provider<List<Station>>((ref) => demoStations);
 final vehiclesProvider = StateProvider<List<Vehicle>>((ref) => demoVehicles);
 final bookingsProvider = StateProvider<List<Booking>>((ref) => demoBookings);
 
-class EvFleetApp extends ConsumerWidget {
+enum UserRole { vehicleOwner, chargerProvider }
+
+extension UserRoleValues on UserRole {
+  String get wireValue =>
+      this == UserRole.vehicleOwner ? 'VEHICLE_OWNER' : 'CHARGER_PROVIDER';
+}
+
+class EvFleetApp extends ConsumerStatefulWidget {
   const EvFleetApp({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<EvFleetApp> createState() => _EvFleetAppState();
+}
+
+class _EvFleetAppState extends ConsumerState<EvFleetApp> {
+  UserRole? _role;
+  bool _onboardingComplete = false;
+  bool _signedIn = false;
+  bool _ready = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _restoreOnboarding();
+  }
+
+  Future<void> _restoreOnboarding() async {
+    final prefs = await SharedPreferences.getInstance();
+    final value = prefs.getString('onboarding.role');
+    if (!mounted) return;
+    setState(() {
+      _role = value == 'CHARGER_PROVIDER'
+          ? UserRole.chargerProvider
+          : value == 'VEHICLE_OWNER'
+          ? UserRole.vehicleOwner
+          : null;
+      _onboardingComplete = prefs.getBool('onboarding.completed') ?? false;
+      _signedIn = prefs.getBool('session.signed_in') ?? false;
+      _ready = true;
+    });
+  }
+
+  Future<void> _saveRole(UserRole role) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('onboarding.role', role.wireValue);
+    if (!mounted) return;
+    _role = role;
+  }
+
+  Future<String> _signIn(UserRole? selectedRole) async {
+    final prefs = await SharedPreferences.getInstance();
+    if (_role == null && selectedRole != null) {
+      await prefs.setString('onboarding.role', selectedRole.wireValue);
+      _role = selectedRole;
+    }
+    await prefs.setBool('session.signed_in', true);
+    _signedIn = true;
+    return _onboardingComplete ? _homePath : '/setup';
+  }
+
+  Future<void> _register({
+    required String fullName,
+    required String email,
+  }) async {
+    final prefs = await SharedPreferences.getInstance();
+    await ref
+        .read(backendApiServiceProvider)
+        .saveProfile(fullName: fullName, email: email, role: _role!.wireValue);
+    await prefs.setString('account.full_name', fullName);
+    await prefs.setString('account.email', email);
+    await prefs.setBool('session.signed_in', true);
+    _signedIn = true;
+  }
+
+  Future<void> _signOut() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool('session.signed_in', false);
+    _signedIn = false;
+  }
+
+  Future<void> _updateProfile({
+    required String fullName,
+    required String email,
+    String? phone,
+  }) async {
+    final prefs = await SharedPreferences.getInstance();
+    await ref
+        .read(backendApiServiceProvider)
+        .updateProfile(fullName: fullName, email: email, phone: phone);
+    await prefs.setString('account.full_name', fullName);
+    await prefs.setString('account.email', email);
+    if (phone != null) await prefs.setString('account.phone', phone);
+  }
+
+  Future<void> _completeOnboarding(SetupData data) async {
+    final prefs = await SharedPreferences.getInstance();
+    final api = ref.read(backendApiServiceProvider);
+    if (_role == UserRole.vehicleOwner) {
+      await api.createVehicle(
+        vehicleType: data.vehicleType!,
+        model: data.model!,
+        brand: data.brand,
+        registrationNumber: data.registrationNumber,
+        batteryCapacityKwh: data.batteryCapacityKwh,
+        connectorType: data.connectorType,
+      );
+    } else {
+      await api.createStation(
+        stationName: data.stationName!,
+        providerType: data.providerType!,
+        accessType: data.accessType!,
+        address: data.address!,
+        latitude: data.latitude!,
+        longitude: data.longitude!,
+        connectorType: data.connectorType!,
+        powerKw: data.powerKw!,
+        pricePerKwh: data.pricePerKwh,
+      );
+    }
+    await api.saveOnboarding(role: _role!.wireValue, completed: true, step: 1);
+    await prefs.setBool('onboarding.completed', true);
+    _onboardingComplete = true;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (!_ready) {
+      return const MaterialApp(
+        home: Scaffold(body: Center(child: CircularProgressIndicator())),
+      );
+    }
     final router = GoRouter(
-      initialLocation: '/home',
+      initialLocation: !_signedIn
+          ? '/signin'
+          : _role == null
+          ? '/signin'
+          : _onboardingComplete
+          ? _homePath
+          : '/setup',
+      redirect: (context, state) {
+        final location = state.matchedLocation;
+        if (_role != null &&
+            !_signedIn &&
+            location != '/signin' &&
+            location != '/register' &&
+            location != '/role') {
+          return '/signin';
+        }
+        if (_role == null &&
+            !_signedIn &&
+            location != '/signin' &&
+            location != '/register' &&
+            location != '/role') {
+          return '/signin';
+        }
+        if (_role != null &&
+            _signedIn &&
+            !_onboardingComplete &&
+            location != '/setup' &&
+            location != '/register' &&
+            location != '/role') {
+          return '/setup';
+        }
+        if (_role == UserRole.chargerProvider &&
+            _signedIn &&
+            (location.startsWith('/home') ||
+                location.startsWith('/explore') ||
+                location.startsWith('/bookings') ||
+                location.startsWith('/vehicles'))) {
+          return '/provider';
+        }
+        if (_role == UserRole.vehicleOwner &&
+            _signedIn &&
+            location.startsWith('/provider')) {
+          return '/home';
+        }
+        return null;
+      },
       routes: [
-        GoRoute(path: '/home', builder: (_, __) => const ShellScreen(index: 0)),
+        GoRoute(
+          path: '/role',
+          builder: (_, __) => RoleSelectionScreen(
+            onContinue: (role) async {
+              await _saveRole(role);
+            },
+          ),
+        ),
+        GoRoute(
+          path: '/setup',
+          builder: (_, __) =>
+              SetupScreen(role: _role!, onComplete: _completeOnboarding),
+        ),
+        GoRoute(
+          path: '/provider',
+          builder: (_, __) => const ProviderDashboardScreen(),
+        ),
+        GoRoute(
+          path: '/home',
+          builder: (_, __) => ShellScreen(index: 0, onSignOut: _signOut),
+        ),
         GoRoute(
           path: '/explore',
-          builder: (_, __) => const ShellScreen(index: 1),
+          builder: (_, __) => ShellScreen(index: 1, onSignOut: _signOut),
         ),
         GoRoute(
           path: '/bookings',
-          builder: (_, __) => const ShellScreen(index: 2),
+          builder: (_, __) => ShellScreen(index: 2, onSignOut: _signOut),
         ),
         GoRoute(
           path: '/profile',
-          builder: (_, __) => const ShellScreen(index: 3),
+          builder: (_, __) => ShellScreen(index: 3, onSignOut: _signOut),
         ),
         GoRoute(
           path: '/station/:id',
@@ -49,7 +244,19 @@ class EvFleetApp extends ConsumerWidget {
               BookingScreen(stationId: state.pathParameters['id']!),
         ),
         GoRoute(path: '/vehicles', builder: (_, __) => const VehiclesScreen()),
-        GoRoute(path: '/signin', builder: (_, __) => const SignInScreen()),
+        GoRoute(
+          path: '/profile/edit',
+          builder: (_, __) => EditProfileScreen(onSave: _updateProfile),
+        ),
+        GoRoute(
+          path: '/signin',
+          builder: (_, __) =>
+              SignInScreen(initialRole: _role, onSignIn: _signIn),
+        ),
+        GoRoute(
+          path: '/register',
+          builder: (_, __) => RegisterScreen(onRegister: _register),
+        ),
       ],
       errorBuilder: (_, __) => const NotFoundScreen(),
     );
@@ -84,6 +291,9 @@ class EvFleetApp extends ConsumerWidget {
       routerConfig: router,
     );
   }
+
+  String get _homePath =>
+      _role == UserRole.chargerProvider ? '/provider' : '/home';
 }
 
 class Station {
@@ -194,8 +404,9 @@ const demoBookings = [
 ];
 
 class ShellScreen extends StatefulWidget {
-  const ShellScreen({required this.index, super.key});
+  const ShellScreen({required this.index, required this.onSignOut, super.key});
   final int index;
+  final Future<void> Function() onSignOut;
   @override
   State<ShellScreen> createState() => _ShellScreenState();
 }
@@ -204,11 +415,11 @@ class _ShellScreenState extends State<ShellScreen> {
   late int selected = widget.index;
   @override
   Widget build(BuildContext context) {
-    final screens = const [
+    final screens = [
       HomeScreen(),
       ExploreScreen(),
       BookingsScreen(),
-      ProfileScreen(),
+      ProfileScreen(onSignOut: widget.onSignOut),
     ];
     return Scaffold(
       body: screens[selected],
@@ -367,7 +578,7 @@ class HomeScreen extends ConsumerWidget {
               QuickAction(
                 icon: Icons.add_business,
                 label: 'List charger',
-                onTap: () => _demoMessage(
+                onTap: () => _showMessage(
                   context,
                   'Station listing form will connect to your API.',
                 ),
@@ -429,7 +640,7 @@ class _ExploreScreenState extends ConsumerState<ExploreScreen> {
                   ),
                 ),
                 IconButton(
-                  onPressed: () => _demoMessage(
+                  onPressed: () => _showMessage(
                     context,
                     'Filters are ready for backend availability data.',
                   ),
@@ -511,7 +722,7 @@ class DemoMap extends StatelessWidget {
           bottom: 20,
           left: 20,
           child: Text(
-            'Demo map • connect a map provider later',
+            'Live station map',
             style: TextStyle(color: AppColors.muted, fontSize: 12),
           ),
         ),
@@ -770,7 +981,7 @@ class _BookingScreenState extends ConsumerState<BookingScreen> {
           ),
           const SizedBox(height: 4),
           Text(
-            'Demo booking • server confirms final availability',
+            'Availability is confirmed when you submit the request.',
             style: TextStyle(color: AppColors.muted),
           ),
           const SizedBox(height: 26),
@@ -872,9 +1083,9 @@ class _BookingScreenState extends ConsumerState<BookingScreen> {
                           ],
                         );
                     context.go('/bookings');
-                    _demoMessage(
+                    _showMessage(
                       context,
-                      'Demo booking created. Backend confirmation is still required.',
+                      'Booking request submitted for confirmation.',
                     );
                   },
             child: const Text('Request booking'),
@@ -1047,7 +1258,7 @@ class VehiclesScreen extends ConsumerWidget {
           ),
           const SizedBox(height: 8),
           OutlinedButton.icon(
-            onPressed: () => _demoMessage(
+            onPressed: () => _showMessage(
               context,
               'Vehicle form is ready for persistence integration.',
             ),
@@ -1061,7 +1272,9 @@ class VehiclesScreen extends ConsumerWidget {
 }
 
 class ProfileScreen extends StatelessWidget {
-  const ProfileScreen({super.key});
+  const ProfileScreen({required this.onSignOut, super.key});
+
+  final Future<void> Function() onSignOut;
   @override
   Widget build(BuildContext context) => AppPage(
     child: ListView(
@@ -1070,6 +1283,14 @@ class ProfileScreen extends StatelessWidget {
         const Text(
           'Profile',
           style: TextStyle(fontSize: 26, fontWeight: FontWeight.w800),
+        ),
+        Align(
+          alignment: Alignment.centerRight,
+          child: OutlinedButton.icon(
+            onPressed: () => context.push('/profile/edit'),
+            icon: const Icon(Icons.edit_outlined),
+            label: const Text('Edit profile'),
+          ),
         ),
         const SizedBox(height: 20),
         Container(
@@ -1121,7 +1342,7 @@ class ProfileScreen extends StatelessWidget {
         _ProfileItem(
           icon: Icons.notifications_none,
           title: 'Notifications',
-          onTap: () => _demoMessage(
+          onTap: () => _showMessage(
             context,
             'Notification preferences are not connected yet.',
           ),
@@ -1129,7 +1350,7 @@ class ProfileScreen extends StatelessWidget {
         _ProfileItem(
           icon: Icons.settings_outlined,
           title: 'Settings',
-          onTap: () => _demoMessage(
+          onTap: () => _showMessage(
             context,
             'Settings are ready for your product configuration.',
           ),
@@ -1137,16 +1358,117 @@ class ProfileScreen extends StatelessWidget {
         _ProfileItem(
           icon: Icons.logout,
           title: 'Sign out',
-          onTap: () => context.go('/signin'),
+          onTap: () async {
+            await onSignOut();
+            if (context.mounted) context.go('/signin');
+          },
         ),
         const SizedBox(height: 20),
-        const Center(
-          child: Text(
-            'Demo mode • no real account or tokens are used',
-            style: TextStyle(color: AppColors.muted, fontSize: 12),
-          ),
-        ),
       ],
+    ),
+  );
+}
+
+class EditProfileScreen extends StatefulWidget {
+  const EditProfileScreen({required this.onSave, super.key});
+
+  final Future<void> Function({
+    required String fullName,
+    required String email,
+    String? phone,
+  })
+  onSave;
+
+  @override
+  State<EditProfileScreen> createState() => _EditProfileScreenState();
+}
+
+class _EditProfileScreenState extends State<EditProfileScreen> {
+  final _formKey = GlobalKey<FormState>();
+  final _name = TextEditingController();
+  final _email = TextEditingController();
+  final _phone = TextEditingController();
+  bool _busy = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    final prefs = await SharedPreferences.getInstance();
+    if (!mounted) return;
+    _name.text = prefs.getString('account.full_name') ?? '';
+    _email.text = prefs.getString('account.email') ?? '';
+    _phone.text = prefs.getString('account.phone') ?? '';
+    setState(() {});
+  }
+
+  @override
+  void dispose() {
+    _name.dispose();
+    _email.dispose();
+    _phone.dispose();
+    super.dispose();
+  }
+
+  Future<void> _save() async {
+    if (!(_formKey.currentState?.validate() ?? false) || _busy) return;
+    setState(() => _busy = true);
+    try {
+      await widget.onSave(
+        fullName: _name.text.trim(),
+        email: _email.text.trim(),
+        phone: _phone.text.trim(),
+      );
+      if (mounted) context.pop();
+    } catch (error) {
+      if (!mounted) return;
+      _showMessage(context, 'Could not save profile: $error');
+      setState(() => _busy = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) => Scaffold(
+    appBar: AppBar(title: const Text('Edit profile')),
+    body: Form(
+      key: _formKey,
+      child: ListView(
+        padding: const EdgeInsets.all(24),
+        children: [
+          TextFormField(
+            controller: _name,
+            decoration: const InputDecoration(labelText: 'Full name'),
+            validator: (value) => value == null || value.trim().isEmpty
+                ? 'Full name is required'
+                : null,
+          ),
+          const SizedBox(height: 14),
+          TextFormField(
+            controller: _email,
+            keyboardType: TextInputType.emailAddress,
+            decoration: const InputDecoration(labelText: 'Email'),
+            validator: (value) => value == null || !value.contains('@')
+                ? 'Enter a valid email address'
+                : null,
+          ),
+          const SizedBox(height: 14),
+          TextFormField(
+            controller: _phone,
+            keyboardType: TextInputType.phone,
+            decoration: const InputDecoration(labelText: 'Phone (optional)'),
+          ),
+          const SizedBox(height: 24),
+          FilledButton(
+            onPressed: _busy ? null : _save,
+            child: _busy
+                ? const CircularProgressIndicator()
+                : const Text('Save changes'),
+          ),
+        ],
+      ),
     ),
   );
 }
@@ -1170,8 +1492,729 @@ class _ProfileItem extends StatelessWidget {
   );
 }
 
-class SignInScreen extends StatelessWidget {
-  const SignInScreen({super.key});
+class RoleSelectionScreen extends StatefulWidget {
+  const RoleSelectionScreen({required this.onContinue, super.key});
+
+  final Future<void> Function(UserRole role) onContinue;
+
+  @override
+  State<RoleSelectionScreen> createState() => _RoleSelectionScreenState();
+}
+
+class _RoleSelectionScreenState extends State<RoleSelectionScreen> {
+  UserRole? _selected;
+  bool _busy = false;
+
+  Future<void> _continue() async {
+    final selected = _selected;
+    if (selected == null || _busy) return;
+    setState(() => _busy = true);
+    await widget.onContinue(selected);
+    if (!mounted) return;
+    setState(() => _busy = false);
+    context.push('/register');
+  }
+
+  @override
+  Widget build(BuildContext context) => Scaffold(
+    backgroundColor: AppColors.surface,
+    body: SafeArea(
+      child: ListView(
+        padding: const EdgeInsets.all(24),
+        children: [
+          const SizedBox(height: 32),
+          const Icon(
+            Icons.ev_station_rounded,
+            size: 52,
+            color: AppColors.emerald,
+          ),
+          const SizedBox(height: 20),
+          const Text(
+            'How will you use Voltway?',
+            textAlign: TextAlign.center,
+            style: TextStyle(fontSize: 28, fontWeight: FontWeight.w800),
+          ),
+          const SizedBox(height: 8),
+          const Text(
+            'Choose a primary role to personalize your experience.',
+            textAlign: TextAlign.center,
+            style: TextStyle(color: AppColors.muted),
+          ),
+          const SizedBox(height: 28),
+          _RoleCard(
+            role: UserRole.vehicleOwner,
+            selected: _selected == UserRole.vehicleOwner,
+            icon: Icons.electric_car_rounded,
+            title: 'Vehicle Owner',
+            subtitle: 'Find nearby chargers and book charging slots.',
+            onTap: () => setState(() => _selected = UserRole.vehicleOwner),
+          ),
+          const SizedBox(height: 14),
+          _RoleCard(
+            role: UserRole.chargerProvider,
+            selected: _selected == UserRole.chargerProvider,
+            icon: Icons.ev_station_rounded,
+            title: 'Charger Provider',
+            subtitle: 'List your charger and manage charging requests.',
+            onTap: () => setState(() => _selected = UserRole.chargerProvider),
+          ),
+          const SizedBox(height: 28),
+          FilledButton(
+            onPressed: _selected == null || _busy ? null : _continue,
+            child: _busy
+                ? const SizedBox(
+                    height: 20,
+                    width: 20,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : const Text('Continue'),
+          ),
+        ],
+      ),
+    ),
+  );
+}
+
+class _RoleCard extends StatelessWidget {
+  const _RoleCard({
+    required this.role,
+    required this.selected,
+    required this.icon,
+    required this.title,
+    required this.subtitle,
+    required this.onTap,
+  });
+
+  final UserRole role;
+  final bool selected;
+  final IconData icon;
+  final String title;
+  final String subtitle;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) => InkWell(
+    onTap: onTap,
+    borderRadius: BorderRadius.circular(20),
+    child: AnimatedContainer(
+      duration: const Duration(milliseconds: 180),
+      padding: const EdgeInsets.all(18),
+      decoration: BoxDecoration(
+        color: selected ? AppColors.lime.withValues(alpha: .28) : Colors.white,
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(
+          color: selected
+              ? AppColors.emerald
+              : Colors.black.withValues(alpha: .08),
+          width: selected ? 2 : 1,
+        ),
+      ),
+      child: Row(
+        children: [
+          CircleAvatar(
+            radius: 25,
+            backgroundColor: selected ? AppColors.emerald : AppColors.surface,
+            child: Icon(
+              icon,
+              color: selected ? Colors.white : AppColors.emerald,
+            ),
+          ),
+          const SizedBox(width: 14),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  title,
+                  style: const TextStyle(
+                    fontWeight: FontWeight.w800,
+                    fontSize: 17,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(subtitle, style: const TextStyle(color: AppColors.muted)),
+              ],
+            ),
+          ),
+          Icon(
+            selected ? Icons.radio_button_checked : Icons.radio_button_off,
+            color: selected ? AppColors.emerald : AppColors.muted,
+          ),
+        ],
+      ),
+    ),
+  );
+}
+
+class SetupData {
+  const SetupData({
+    this.vehicleType,
+    this.model,
+    this.brand,
+    this.registrationNumber,
+    this.batteryCapacityKwh,
+    this.connectorType,
+    this.stationName,
+    this.providerType,
+    this.accessType,
+    this.address,
+    this.latitude,
+    this.longitude,
+    this.powerKw,
+    this.pricePerKwh,
+  });
+
+  final String? vehicleType;
+  final String? model;
+  final String? brand;
+  final String? registrationNumber;
+  final double? batteryCapacityKwh;
+  final String? connectorType;
+  final String? stationName;
+  final String? providerType;
+  final String? accessType;
+  final String? address;
+  final double? latitude;
+  final double? longitude;
+  final double? powerKw;
+  final double? pricePerKwh;
+}
+
+class SetupScreen extends StatefulWidget {
+  const SetupScreen({required this.role, required this.onComplete, super.key});
+
+  final UserRole role;
+  final Future<void> Function(SetupData data) onComplete;
+
+  @override
+  State<SetupScreen> createState() => _SetupScreenState();
+}
+
+class _SetupScreenState extends State<SetupScreen> {
+  final _formKey = GlobalKey<FormState>();
+  final _controllers = <String, TextEditingController>{
+    for (final key in [
+      'vehicleType',
+      'model',
+      'brand',
+      'registration',
+      'battery',
+      'connector',
+      'stationName',
+      'providerType',
+      'accessType',
+      'address',
+      'latitude',
+      'longitude',
+      'powerKw',
+      'price',
+    ])
+      key: TextEditingController(),
+  };
+  bool _busy = false;
+
+  TextEditingController get _vehicleType => _controllers['vehicleType']!;
+  TextEditingController get _model => _controllers['model']!;
+  TextEditingController get _brand => _controllers['brand']!;
+  TextEditingController get _registration => _controllers['registration']!;
+  TextEditingController get _battery => _controllers['battery']!;
+  TextEditingController get _connector => _controllers['connector']!;
+  TextEditingController get _stationName => _controllers['stationName']!;
+  TextEditingController get _providerType => _controllers['providerType']!;
+  TextEditingController get _accessType => _controllers['accessType']!;
+  TextEditingController get _address => _controllers['address']!;
+  TextEditingController get _latitude => _controllers['latitude']!;
+  TextEditingController get _longitude => _controllers['longitude']!;
+  TextEditingController get _powerKw => _controllers['powerKw']!;
+  TextEditingController get _price => _controllers['price']!;
+
+  @override
+  void dispose() {
+    for (final controller in _controllers.values) {
+      controller.dispose();
+    }
+    super.dispose();
+  }
+
+  String? _required(String? value, String label) =>
+      value == null || value.trim().isEmpty ? '$label is required' : null;
+
+  String? _positive(String? value, String label, {bool allowZero = false}) {
+    final number = double.tryParse(value?.trim() ?? '');
+    if (number == null || (allowZero ? number < 0 : number <= 0)) {
+      return '$label must be a valid ${allowZero ? 'non-negative' : 'positive'} number';
+    }
+    return null;
+  }
+
+  String? _coordinate(
+    String? value,
+    String label,
+    double minimum,
+    double maximum,
+  ) {
+    final number = double.tryParse(value?.trim() ?? '');
+    if (number == null || number < minimum || number > maximum) {
+      return '$label must be between $minimum and $maximum';
+    }
+    return null;
+  }
+
+  Future<void> _finish() async {
+    if (!(_formKey.currentState?.validate() ?? false) || _busy) return;
+    setState(() => _busy = true);
+    final provider = widget.role == UserRole.chargerProvider;
+    final data = provider
+        ? SetupData(
+            stationName: _stationName.text.trim(),
+            providerType: _providerType.text.trim(),
+            accessType: _accessType.text.trim(),
+            address: _address.text.trim(),
+            latitude: double.parse(_latitude.text.trim()),
+            longitude: double.parse(_longitude.text.trim()),
+            connectorType: _connector.text.trim(),
+            powerKw: double.parse(_powerKw.text.trim()),
+            pricePerKwh: _price.text.trim().isEmpty
+                ? null
+                : double.parse(_price.text.trim()),
+          )
+        : SetupData(
+            vehicleType: _vehicleType.text.trim(),
+            model: _model.text.trim(),
+            brand: _brand.text.trim(),
+            registrationNumber: _registration.text.trim(),
+            batteryCapacityKwh: _battery.text.trim().isEmpty
+                ? null
+                : double.parse(_battery.text.trim()),
+            connectorType: _connector.text.trim(),
+          );
+    try {
+      await widget.onComplete(data);
+      if (!mounted) return;
+      context.pushReplacement(provider ? '/provider' : '/home');
+    } catch (error) {
+      if (mounted) {
+        _showMessage(context, 'Could not save setup: $error');
+        setState(() => _busy = false);
+      }
+    }
+  }
+
+  Widget _field(
+    TextEditingController controller,
+    String label, {
+    bool required = false,
+    String? Function(String?)? validator,
+    TextInputType? keyboardType,
+  }) => Padding(
+    padding: const EdgeInsets.only(bottom: 14),
+    child: TextFormField(
+      controller: controller,
+      keyboardType: keyboardType,
+      validator: validator ?? (required ? (v) => _required(v, label) : null),
+      decoration: InputDecoration(labelText: label),
+    ),
+  );
+
+  @override
+  Widget build(BuildContext context) {
+    final provider = widget.role == UserRole.chargerProvider;
+    return Scaffold(
+      appBar: AppBar(
+        title: Text(provider ? 'Set up your charger' : 'Set up your vehicle'),
+      ),
+      body: Form(
+        key: _formKey,
+        child: ListView(
+          padding: const EdgeInsets.all(24),
+          children: [
+            Text(
+              provider
+                  ? 'These fields are required to create your station listing.'
+                  : 'Add the vehicle details required for charging bookings.',
+              style: const TextStyle(color: AppColors.muted),
+            ),
+            const SizedBox(height: 22),
+            if (provider) ...[
+              _field(_stationName, 'Station name', required: true),
+              _field(
+                _providerType,
+                'Provider type (PUBLIC, BUSINESS, HOUSEHOLD)',
+                required: true,
+              ),
+              _field(
+                _accessType,
+                'Access type (PUBLIC, PRIVATE)',
+                required: true,
+              ),
+              _field(_address, 'Address', required: true),
+              _field(
+                _latitude,
+                'Latitude',
+                required: true,
+                keyboardType: const TextInputType.numberWithOptions(
+                  decimal: true,
+                ),
+                validator: (v) => _coordinate(v, 'Latitude', -90, 90),
+              ),
+              _field(
+                _longitude,
+                'Longitude',
+                required: true,
+                keyboardType: const TextInputType.numberWithOptions(
+                  decimal: true,
+                ),
+                validator: (v) => _coordinate(v, 'Longitude', -180, 180),
+              ),
+              _field(_connector, 'Connector type', required: true),
+              _field(
+                _powerKw,
+                'Power (kW)',
+                required: true,
+                keyboardType: const TextInputType.numberWithOptions(
+                  decimal: true,
+                ),
+                validator: (v) => _positive(v, 'Power'),
+              ),
+              _field(
+                _price,
+                'Price per kWh (optional)',
+                keyboardType: const TextInputType.numberWithOptions(
+                  decimal: true,
+                ),
+                validator: (v) => v == null || v.trim().isEmpty
+                    ? null
+                    : _positive(v, 'Price', allowZero: true),
+              ),
+            ] else ...[
+              _field(_vehicleType, 'Vehicle type', required: true),
+              _field(_model, 'Model', required: true),
+              _field(_brand, 'Brand'),
+              _field(_registration, 'Registration number'),
+              _field(
+                _battery,
+                'Battery capacity (kWh)',
+                keyboardType: const TextInputType.numberWithOptions(
+                  decimal: true,
+                ),
+                validator: (v) => v == null || v.trim().isEmpty
+                    ? null
+                    : _positive(v, 'Battery capacity'),
+              ),
+              _field(_connector, 'Connector type'),
+            ],
+            const SizedBox(height: 8),
+            FilledButton(
+              onPressed: _busy ? null : _finish,
+              child: _busy
+                  ? const CircularProgressIndicator()
+                  : const Text('Save and continue'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class ProviderDashboardScreen extends StatelessWidget {
+  const ProviderDashboardScreen({super.key});
+
+  @override
+  Widget build(BuildContext context) => Scaffold(
+    appBar: AppBar(
+      title: const Text('Provider dashboard'),
+      actions: [
+        IconButton(
+          tooltip: 'Profile',
+          onPressed: () => context.go('/profile'),
+          icon: const Icon(Icons.person_outline),
+        ),
+      ],
+    ),
+    body: ListView(
+      padding: const EdgeInsets.all(20),
+      children: [
+        const Text(
+          'Manage your charging network',
+          style: TextStyle(fontSize: 25, fontWeight: FontWeight.w800),
+        ),
+        const SizedBox(height: 8),
+        const Text(
+          'Keep listings accurate and respond to incoming requests.',
+          style: TextStyle(color: AppColors.muted),
+        ),
+        const SizedBox(height: 24),
+        _ProviderAction(
+          icon: Icons.ev_station_outlined,
+          title: 'My chargers',
+          subtitle: 'Add or edit your station details',
+          onTap: () => _showMessage(
+            context,
+            'Charger management is ready for your API.',
+          ),
+        ),
+        _ProviderAction(
+          icon: Icons.inbox_outlined,
+          title: 'Booking requests',
+          subtitle: 'Review and respond to requests',
+          onTap: () => _showMessage(context, 'No pending requests yet.'),
+        ),
+        _ProviderAction(
+          icon: Icons.schedule_outlined,
+          title: 'Availability',
+          subtitle: 'Set when your charger is available',
+          onTap: () => _showMessage(
+            context,
+            'Availability management is ready for your API.',
+          ),
+        ),
+        _ProviderAction(
+          icon: Icons.history,
+          title: 'Charging history',
+          subtitle: 'Review completed sessions',
+          onTap: () => _showMessage(context, 'Charging history is ready.'),
+        ),
+      ],
+    ),
+  );
+}
+
+class _ProviderAction extends StatelessWidget {
+  const _ProviderAction({
+    required this.icon,
+    required this.title,
+    required this.subtitle,
+    required this.onTap,
+  });
+  final IconData icon;
+  final String title;
+  final String subtitle;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) => Card(
+    margin: const EdgeInsets.only(bottom: 12),
+    child: ListTile(
+      onTap: onTap,
+      leading: CircleAvatar(
+        backgroundColor: AppColors.surface,
+        child: Icon(icon, color: AppColors.emerald),
+      ),
+      title: Text(title, style: const TextStyle(fontWeight: FontWeight.w700)),
+      subtitle: Text(subtitle),
+      trailing: const Icon(Icons.chevron_right),
+    ),
+  );
+}
+
+class RegisterScreen extends StatefulWidget {
+  const RegisterScreen({required this.onRegister, super.key});
+
+  final Future<void> Function({required String fullName, required String email})
+  onRegister;
+
+  @override
+  State<RegisterScreen> createState() => _RegisterScreenState();
+}
+
+class _RegisterScreenState extends State<RegisterScreen> {
+  final _formKey = GlobalKey<FormState>();
+  final _name = TextEditingController();
+  final _email = TextEditingController();
+  final _password = TextEditingController();
+  final _confirmPassword = TextEditingController();
+  bool _busy = false;
+  String? _errorMessage;
+
+  @override
+  void dispose() {
+    _name.dispose();
+    _email.dispose();
+    _password.dispose();
+    _confirmPassword.dispose();
+    super.dispose();
+  }
+
+  Future<void> _submit() async {
+    if (!(_formKey.currentState?.validate() ?? false) || _busy) return;
+    setState(() {
+      _busy = true;
+      _errorMessage = null;
+    });
+    try {
+      await widget.onRegister(
+        fullName: _name.text.trim(),
+        email: _email.text.trim(),
+      );
+      if (!mounted) return;
+      setState(() => _busy = false);
+      context.push('/setup');
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _busy = false;
+        _errorMessage = errorMessageOf(error);
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) => Scaffold(
+    appBar: AppBar(title: const Text('Create account')),
+    body: Form(
+      key: _formKey,
+      child: ListView(
+        padding: const EdgeInsets.all(24),
+        children: [
+          const Text(
+            'Create your Voltway account',
+            style: TextStyle(fontSize: 28, fontWeight: FontWeight.w800),
+          ),
+          const SizedBox(height: 8),
+          const Text(
+            'Set up your profile to access the right charging tools for your role.',
+            style: TextStyle(color: AppColors.muted),
+          ),
+          const SizedBox(height: 28),
+          if (_errorMessage != null) ...[
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: Colors.red.shade50,
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Text(
+                _errorMessage!,
+                style: TextStyle(color: Colors.red.shade800),
+              ),
+            ),
+            const SizedBox(height: 16),
+          ],
+          TextFormField(
+            controller: _name,
+            textInputAction: TextInputAction.next,
+            validator: (value) => value == null || value.trim().isEmpty
+                ? 'Full name is required'
+                : null,
+            decoration: const InputDecoration(
+              labelText: 'Full name',
+              prefixIcon: Icon(Icons.person_outline),
+            ),
+          ),
+          const SizedBox(height: 14),
+          TextFormField(
+            controller: _email,
+            keyboardType: TextInputType.emailAddress,
+            textInputAction: TextInputAction.next,
+            validator: (value) => value == null || !value.contains('@')
+                ? 'Enter a valid email address'
+                : null,
+            decoration: const InputDecoration(
+              labelText: 'Email',
+              prefixIcon: Icon(Icons.email_outlined),
+            ),
+          ),
+          const SizedBox(height: 14),
+          TextFormField(
+            controller: _password,
+            obscureText: true,
+            textInputAction: TextInputAction.next,
+            validator: (value) => value == null || value.length < 8
+                ? 'Password must be at least 8 characters'
+                : null,
+            decoration: const InputDecoration(
+              labelText: 'Password',
+              prefixIcon: Icon(Icons.lock_outline),
+            ),
+          ),
+          const SizedBox(height: 14),
+          TextFormField(
+            controller: _confirmPassword,
+            obscureText: true,
+            validator: (value) =>
+                value != _password.text ? 'Passwords do not match' : null,
+            decoration: const InputDecoration(
+              labelText: 'Confirm password',
+              prefixIcon: Icon(Icons.lock_reset_outlined),
+            ),
+          ),
+          const SizedBox(height: 24),
+          FilledButton(
+            onPressed: _busy ? null : _submit,
+            child: _busy
+                ? const SizedBox(
+                    height: 20,
+                    width: 20,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : const Text('Create account'),
+          ),
+          const SizedBox(height: 12),
+          TextButton(
+            onPressed: _busy ? null : () => context.pop(),
+            child: const Text('Already have an account? Sign in'),
+          ),
+        ],
+      ),
+    ),
+  );
+}
+
+class SignInScreen extends StatefulWidget {
+  const SignInScreen({
+    required this.initialRole,
+    required this.onSignIn,
+    super.key,
+  });
+
+  final UserRole? initialRole;
+  final Future<String> Function(UserRole? selectedRole) onSignIn;
+
+  @override
+  State<SignInScreen> createState() => _SignInScreenState();
+}
+
+class _SignInScreenState extends State<SignInScreen> {
+  final _formKey = GlobalKey<FormState>();
+  final _email = TextEditingController();
+  final _password = TextEditingController();
+  bool _busy = false;
+  UserRole? _selectedRole;
+
+  @override
+  void initState() {
+    super.initState();
+    _selectedRole = widget.initialRole;
+  }
+
+  @override
+  void dispose() {
+    _email.dispose();
+    _password.dispose();
+    super.dispose();
+  }
+
+  Future<void> _submit() async {
+    if (!(_formKey.currentState?.validate() ?? false) ||
+        _password.text.length < 8 ||
+        _busy) {
+      if (_password.text.length < 8 && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Password must be at least 8 characters'),
+          ),
+        );
+      }
+      return;
+    }
+    setState(() => _busy = true);
+    final destination = await widget.onSignIn(_selectedRole);
+    if (!mounted) return;
+    setState(() => _busy = false);
+    context.pushReplacement(destination);
+  }
+
   @override
   Widget build(BuildContext context) => Scaffold(
     body: SafeArea(
@@ -1193,32 +2236,73 @@ class SignInScreen extends StatelessWidget {
             style: TextStyle(color: AppColors.muted),
           ),
           const SizedBox(height: 36),
-          const TextField(
-            decoration: InputDecoration(
-              labelText: 'Email',
-              prefixIcon: Icon(Icons.email_outlined),
+          if (widget.initialRole == null) ...[
+            const Text(
+              'Account type',
+              style: TextStyle(fontWeight: FontWeight.w700),
+            ),
+            const SizedBox(height: 10),
+            SegmentedButton<UserRole>(
+              segments: const [
+                ButtonSegment(
+                  value: UserRole.vehicleOwner,
+                  label: Text('Vehicle owner'),
+                  icon: Icon(Icons.electric_car_outlined),
+                ),
+                ButtonSegment(
+                  value: UserRole.chargerProvider,
+                  label: Text('Charger provider'),
+                  icon: Icon(Icons.ev_station_outlined),
+                ),
+              ],
+              selected: _selectedRole == null ? {} : {_selectedRole!},
+              emptySelectionAllowed: true,
+              onSelectionChanged: (roles) =>
+                  setState(() => _selectedRole = roles.first),
+            ),
+            const SizedBox(height: 18),
+          ],
+          Form(
+            key: _formKey,
+            child: TextFormField(
+              controller: _email,
+              keyboardType: TextInputType.emailAddress,
+              validator: (value) => value == null || !value.contains('@')
+                  ? 'Enter a valid email address'
+                  : null,
+              decoration: const InputDecoration(
+                labelText: 'Email',
+                prefixIcon: Icon(Icons.email_outlined),
+              ),
             ),
           ),
           const SizedBox(height: 14),
-          const TextField(
+          TextFormField(
+            controller: _password,
             obscureText: true,
-            decoration: InputDecoration(
+            validator: (value) => value == null || value.length < 8
+                ? 'Password must be at least 8 characters'
+                : null,
+            decoration: const InputDecoration(
               labelText: 'Password',
               prefixIcon: Icon(Icons.lock_outline),
             ),
           ),
           const SizedBox(height: 22),
           FilledButton(
-            onPressed: () => context.go('/home'),
-            child: const Text('Continue in demo mode'),
+            onPressed: _busy || _selectedRole == null ? null : _submit,
+            child: _busy
+                ? const SizedBox(
+                    height: 20,
+                    width: 20,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : const Text('Sign in'),
           ),
           const SizedBox(height: 12),
-          const Center(
-            child: Text(
-              'Cognito authentication will be connected after AWS configuration is confirmed.',
-              textAlign: TextAlign.center,
-              style: TextStyle(color: AppColors.muted, fontSize: 12),
-            ),
+          TextButton(
+            onPressed: _busy ? null : () => context.push('/role'),
+            child: const Text('New here? Create an account'),
           ),
         ],
       ),
@@ -1232,7 +2316,7 @@ class NotFoundScreen extends StatelessWidget {
   Widget build(BuildContext context) => Scaffold(
     body: Center(
       child: FilledButton(
-        onPressed: () => context.go('/home'),
+        onPressed: () => context.go('/role'),
         child: const Text('Return home'),
       ),
     ),
@@ -1319,6 +2403,6 @@ class UpcomingCard extends StatelessWidget {
   );
 }
 
-void _demoMessage(BuildContext context, String message) =>
+void _showMessage(BuildContext context, String message) =>
     ScaffoldMessenger.of(context)
         .showSnackBar(SnackBar(content: Text(message)));

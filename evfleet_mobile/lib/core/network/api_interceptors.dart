@@ -1,12 +1,9 @@
 import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
 
-/// Reads the current JWT access token from secure storage.
 typedef AccessTokenReader = Future<String?> Function();
 
-/// Attaches the bearer token to outgoing API calls and (optionally) logs
-/// requests in debug mode. Tokens are read from secure storage only —
-/// they are never written to shared preferences.
+/// Adds the Cognito access token to API requests without logging credentials.
 class ApiInterceptor extends Interceptor {
   ApiInterceptor({required this.readAccessToken, this.enableLogging = false});
 
@@ -23,7 +20,7 @@ class ApiInterceptor extends Interceptor {
       options.headers['Authorization'] = 'Bearer $token';
     }
     if (enableLogging) {
-      debugPrint('→ ${options.method} ${options.uri}');
+      debugPrint('-> ${options.method} ${options.uri}');
     }
     handler.next(options);
   }
@@ -31,7 +28,7 @@ class ApiInterceptor extends Interceptor {
   @override
   void onResponse(Response response, ResponseInterceptorHandler handler) {
     if (enableLogging) {
-      debugPrint('← ${response.statusCode} ${response.requestOptions.uri}');
+      debugPrint('<- ${response.statusCode} ${response.requestOptions.uri}');
     }
     handler.next(response);
   }
@@ -40,7 +37,7 @@ class ApiInterceptor extends Interceptor {
   void onError(DioException err, ErrorInterceptorHandler handler) {
     if (enableLogging) {
       debugPrint(
-        '← error ${err.response?.statusCode} ${err.requestOptions.uri}',
+        '<- error ${err.response?.statusCode} ${err.requestOptions.uri}',
       );
     }
     handler.next(err);

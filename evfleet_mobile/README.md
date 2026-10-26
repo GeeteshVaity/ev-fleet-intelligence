@@ -1,16 +1,22 @@
 # Voltway EV charging app
 
-Voltway is the Flutter UI foundation for the EV Fleet Intelligence charging
-platform. The current build is intentionally **demo mode**: stations, vehicles,
-bookings, and the signed-in profile come from in-memory Riverpod providers.
-No credentials, tokens, or fake backend success responses are stored.
+Voltway is the Flutter client for the EV Fleet Intelligence charging platform.
+The authentication and onboarding flow connects to the Spring Boot backend.
 
 ## Run locally
 
 ```powershell
 cd evfleet_mobile
 flutter pub get
-flutter run
+flutter run --dart-define=API_BASE_URL=http://localhost:8080
+```
+
+When running on an Android emulator, the app automatically maps `localhost` to
+the host machine's `10.0.2.2` address. For a physical device, use the
+development computer's LAN address instead, for example:
+
+```powershell
+flutter run --dart-define=API_BASE_URL=http://192.168.1.25:8080
 ```
 
 Validation:

@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 /// API and backend configuration.
@@ -19,8 +20,27 @@ abstract final class ApiConstants {
   /// Base URL of the Spring Boot backend. Empty until configured.
   static const String apiBaseUrl = String.fromEnvironment('API_BASE_URL');
 
+  /// URL used by the HTTP client for the current platform.
+  ///
+  /// Android emulators expose the host machine through 10.0.2.2. Keeping
+  /// localhost in the run command is convenient for desktop and web, but it
+  /// would otherwise point back at the emulator when the app runs on Android.
+  static String get effectiveApiBaseUrl {
+    if (kIsWeb || defaultTargetPlatform != TargetPlatform.android) {
+      return apiBaseUrl;
+    }
+
+    final uri = Uri.tryParse(apiBaseUrl);
+    if (uri == null || (uri.host != 'localhost' && uri.host != '127.0.0.1')) {
+      return apiBaseUrl;
+    }
+
+    return uri.replace(host: '10.0.2.2').toString();
+  }
+
   /// True while no backend URL has been provided (demo mode).
   static bool get isMockBackend => apiBaseUrl.isEmpty;
+  static bool get isBackendConfigured => apiBaseUrl.isNotEmpty;
 
   // --- Amazon Cognito (values come from the existing User Pool; never guessed)
   static const String cognitoUserPoolId = String.fromEnvironment(
@@ -41,12 +61,12 @@ abstract final class ApiConstants {
       cognitoAppClientId.isNotEmpty;
 
   /// REST paths expected from the Spring Boot API (used by remote data sources).
-  static const String stationsPath = '/api/v1/stations';
-  static const String bookingsPath = '/api/v1/bookings';
-  static const String vehiclesPath = '/api/v1/vehicles';
-  static const String sessionsPath = '/api/v1/charging-sessions';
-  static const String notificationsPath = '/api/v1/notifications';
-  static const String profilePath = '/api/v1/me';
+  static const String stationsPath = '/api/stations';
+  static const String bookingsPath = '/api/bookings';
+  static const String vehiclesPath = '/api/vehicles';
+  static const String sessionsPath = '/api/sessions';
+  static const String notificationsPath = '/api/notifications';
+  static const String profilePath = '/api/users/me';
 }
 
 /// Riverpod-accessible view of [ApiConstants.isMockBackend] so widgets can

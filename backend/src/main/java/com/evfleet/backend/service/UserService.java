@@ -12,6 +12,9 @@ public class UserService {
     public UserService(PlatformService platform) { this.platform = platform; }
     public AppUser createOrUpdate(String sub, AppUser user) { return platform.saveProfile(sub, user); }
     public AppUser current(String sub) { return platform.current(sub); }
+    public AppUser updateOnboarding(String sub, String role, Boolean completed, Integer step) {
+        return platform.updateOnboarding(sub, role, completed, step);
+    }
     public List<Vehicle> vehicles(String sub) { return platform.myVehicles(sub); }
     public List<ChargingStation> stations(String sub) { return platform.mine(sub); }
     public List<com.evfleet.backend.model.ChargingSession> sessions(String sub) { return platform.mySessions(sub); }

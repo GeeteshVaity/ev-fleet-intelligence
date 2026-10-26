@@ -15,6 +15,7 @@ AppException normalizeException(Object error, [StackTrace? stackTrace]) {
       case DioExceptionType.connectionTimeout:
       case DioExceptionType.sendTimeout:
       case DioExceptionType.receiveTimeout:
+      case DioExceptionType.transformTimeout:
         return NetworkException(
           'The request timed out. Please check your connection and try again.',
           code: 'timeout',
@@ -23,7 +24,7 @@ AppException normalizeException(Object error, [StackTrace? stackTrace]) {
       case DioExceptionType.connectionError:
       case DioExceptionType.unknown:
         return NetworkException(
-          'Unable to reach the server. Please check your connection.',
+          _connectionMessage(error),
           code: 'connection',
           cause: error,
         );
@@ -50,7 +51,7 @@ AppException normalizeException(Object error, [StackTrace? stackTrace]) {
           code: '$statusCode',
           cause: error,
         );
-      case DioExceptionType.cancelled:
+      case DioExceptionType.cancel:
         return NetworkException(
           'The request was cancelled.',
           code: 'cancelled',
@@ -71,13 +72,25 @@ AppException normalizeException(Object error, [StackTrace? stackTrace]) {
   );
 }
 
+String _connectionMessage(DioException error) {
+  final host = Uri.tryParse(error.requestOptions.baseUrl)?.host;
+  if (host == 'localhost' || host == '10.0.2.2') {
+    return 'Unable to reach the backend. On a physical Android device, '
+        'launch the app with your computer LAN address, for example '
+        'http://192.168.1.25:8080.';
+  }
+  return 'Unable to reach the server. Please check your connection.';
+}
+
 /// Convenience wrapper that only ever produces a displayable message.
 String errorMessageOf(Object error) => normalizeException(error).message;
 
-Object? _serverMessage(Object? data) {
+String? _serverMessage(Object? data) {
   if (data is Map<String, dynamic>) {
     final message = data['message'] ?? data['error'];
-    if (message is String && message.isNotEmpty) return message;
+    if (message != null && message.toString().isNotEmpty) {
+      return message.toString();
+    }
   }
   if (data is String && data.isNotEmpty && !data.startsWith('<')) return data;
   return null;

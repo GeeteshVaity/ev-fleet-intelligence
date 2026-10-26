@@ -19,7 +19,7 @@ final dioClientProvider = Provider<Dio>((ref) {
 
 abstract final class DioClient {
   static Dio build({required SecureStorageService secureStorage}) {
-    final baseUrl = ApiConstants.apiBaseUrl;
+    final baseUrl = ApiConstants.effectiveApiBaseUrl;
 
     final dio = Dio(
       BaseOptions(

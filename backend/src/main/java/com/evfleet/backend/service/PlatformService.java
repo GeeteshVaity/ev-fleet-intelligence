@@ -35,9 +35,24 @@ public class PlatformService {
         user.setCognitoSub(sub); user.setFullName(input.getFullName()); user.setEmail(input.getEmail()); user.setPhone(input.getPhone()); user.touch();
         return users.save(user);
     }
+    public AppUser updateOnboarding(String sub, String role, Boolean completed, Integer step) {
+        AppUser user = current(sub);
+        if (role != null && !role.equals("VEHICLE_OWNER") && !role.equals("CHARGER_PROVIDER")) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "role must be VEHICLE_OWNER or CHARGER_PROVIDER");
+        }
+        if (user.getRole() != null && role != null && !user.getRole().equals(role)) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "Role cannot be changed after registration");
+        }
+        if (role != null) user.setRole(role);
+        if (completed != null) user.setOnboardingCompleted(completed);
+        if (step != null && step < 1) throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "onboardingStep must be positive");
+        user.setOnboardingStep(step);
+        user.touch();
+        return users.save(user);
+    }
     public List<Vehicle> myVehicles(String sub){ return vehicles.findByOwnerUserId(current(sub).getId()); }
     public Vehicle vehicle(String sub, Long id){ return ownedVehicle(sub,id); }
-    public Vehicle saveVehicle(String sub, Vehicle input){ input.setOwnerUserId(current(sub).getId()); input.setVehicleType(required(input.getVehicleType(),"vehicleType")); input.setModel(required(input.getModel(),"model")); return vehicles.save(input); }
+    public Vehicle saveVehicle(String sub, Vehicle input){ requireRole(sub, "VEHICLE_OWNER"); input.setOwnerUserId(current(sub).getId()); input.setVehicleType(required(input.getVehicleType(),"vehicleType")); input.setModel(required(input.getModel(),"model")); return vehicles.save(input); }
     public Vehicle updateVehicle(String sub, Long id, Vehicle input){ Vehicle v=ownedVehicle(sub,id); v.setVehicleType(required(input.getVehicleType(),"vehicleType")); v.setBrand(input.getBrand()); v.setModel(required(input.getModel(),"model")); v.setRegistrationNumber(input.getRegistrationNumber()); v.setBatteryCapacityKwh(input.getBatteryCapacityKwh()); v.setConnectorType(input.getConnectorType()); return vehicles.save(v); }
     public void deleteVehicle(String sub, Long id){ vehicles.delete(ownedVehicle(sub,id)); }
     private Vehicle ownedVehicle(String sub, Long id){ Vehicle v=vehicles.findById(id).orElseThrow(()->notFound("Vehicle")); if(!v.getOwnerUserId().equals(current(sub).getId())) throw forbidden(); return v; }
@@ -45,10 +60,16 @@ public class PlatformService {
     public List<ChargingStation> browse(){ return stations.findByActiveTrue(); }
     public List<ChargingStation> mine(String sub){ return stations.findByOwnerUserId(current(sub).getId()); }
     public ChargingStation station(Long id){ return stations.findById(id).filter(ChargingStation::isActive).orElseThrow(()->notFound("Station")); }
-    public ChargingStation saveStation(String sub, ChargingStation input){ input.setOwnerUserId(current(sub).getId()); validateCoordinates(input); return stations.save(input); }
+    public ChargingStation saveStation(String sub, ChargingStation input){ requireRole(sub, "CHARGER_PROVIDER"); input.setOwnerUserId(current(sub).getId()); validateCoordinates(input); return stations.save(input); }
     public ChargingStation updateStation(String sub, Long id, ChargingStation input){ ChargingStation s=ownedStation(sub,id); input.setOwnerUserId(s.getOwnerUserId()); input.setActive(s.isActive()); validateCoordinates(input); return copyStation(s,input); }
     public void deactivateStation(String sub, Long id){ ChargingStation s=ownedStation(sub,id); s.setActive(false); stations.save(s); }
     private ChargingStation ownedStation(String sub,Long id){ ChargingStation s=stations.findById(id).orElseThrow(()->notFound("Station")); if(!Objects.equals(s.getOwnerUserId(),current(sub).getId())) throw forbidden(); return s; }
+    private void requireRole(String sub, String required) {
+        AppUser user = current(sub);
+        // Existing records may predate role selection; keep their current
+        // access until an explicit migration assigns a role.
+        if (user.getRole() != null && !required.equals(user.getRole())) throw forbidden();
+    }
     private ChargingStation copyStation(ChargingStation s,ChargingStation i){s.setStationName(i.getStationName());s.setProviderType(i.getProviderType());s.setAccessType(i.getAccessType());s.setAddress(i.getAddress());s.setLatitude(i.getLatitude());s.setLongitude(i.getLongitude());s.setConnectorType(i.getConnectorType());s.setPowerKw(i.getPowerKw());s.setPricePerKwh(i.getPricePerKwh());return stations.save(s);}
     public List<ChargingStation> nearby(double lat,double lon,double radius){ if(lat<-90||lat>90||lon<-180||lon>180||radius<=0) throw new ResponseStatusException(HttpStatus.BAD_REQUEST,"Invalid coordinates or radius"); return browse().stream().filter(s->distance(lat,lon,s.getLatitude().doubleValue(),s.getLongitude().doubleValue())<=radius).sorted(Comparator.comparingDouble(s->distance(lat,lon,s.getLatitude().doubleValue(),s.getLongitude().doubleValue()))).toList(); }
     private double distance(double a,double b,double c,double d){double x=Math.toRadians(c-a),y=Math.toRadians(d-b);double h=Math.sin(x/2)*Math.sin(x/2)+Math.cos(Math.toRadians(a))*Math.cos(Math.toRadians(c))*Math.sin(y/2)*Math.sin(y/2);return 6371*2*Math.atan2(Math.sqrt(h),Math.sqrt(1-h));}
