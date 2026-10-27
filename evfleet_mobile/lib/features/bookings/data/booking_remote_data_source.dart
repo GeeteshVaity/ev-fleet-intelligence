@@ -1,6 +1,7 @@
 import 'package:dio/dio.dart';
 
 import '../../../core/constants/api_constants.dart';
+import '../../../core/errors/app_exception.dart';
 import '../../../core/errors/error_handler.dart';
 import '../domain/booking.dart';
 
@@ -42,8 +43,6 @@ class BookingRemoteDataSource {
           'vehicleId': input.vehicleId,
           'startTime': input.startTime.toIso8601String(),
           'endTime': input.endTime.toIso8601String(),
-          if (input.estimatedEnergyKwh != null)
-            'estimatedEnergyKwh': input.estimatedEnergyKwh,
           if (input.estimatedCost != null) 'estimatedCost': input.estimatedCost,
         },
       );
@@ -55,7 +54,7 @@ class BookingRemoteDataSource {
 
   Future<Booking> cancelBooking(String id) async {
     try {
-      final response = await _dio.patch<dynamic>(
+      final response = await _dio.put<dynamic>(
         '${ApiConstants.bookingsPath}/$id/cancel',
       );
       return Booking.fromJson(_asMap(response.data));

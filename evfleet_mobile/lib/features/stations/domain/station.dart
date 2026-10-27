@@ -246,28 +246,30 @@ class Station {
   };
 
   factory Station.fromJson(Map<String, dynamic> json) => Station(
-    id: json['id'] as String,
-    name: json['name'] as String,
-    address: json['address'] as String,
+    id: '${json['id']}',
+    name: json['name'] as String? ?? json['stationName'] as String? ?? '',
+    address: json['address'] as String? ?? '',
     latitude: (json['latitude'] as num).toDouble(),
     longitude: (json['longitude'] as num).toDouble(),
     providerType: StationProviderType.values.firstWhere(
-      (e) => e.name == json['providerType'],
+      (e) => e.name == json['providerType'].toString().toLowerCase(),
       orElse: () => StationProviderType.business,
     ),
     accessType: StationAccessType.values.firstWhere(
-      (e) => e.name == json['accessType'],
+      (e) => e.name == json['accessType'].toString().toLowerCase(),
       orElse: () => StationAccessType.open,
     ),
     connectorType: ConnectorType.values.firstWhere(
-      (e) => e.name == json['connectorType'],
+      (e) => e.name == json['connectorType'].toString().toLowerCase(),
       orElse: () => ConnectorType.type2,
     ),
-    chargingPowerKw: (json['chargingPowerKw'] as num).toDouble(),
-    pricePerKwh: (json['pricePerKwh'] as num).toDouble(),
+    chargingPowerKw:
+        (json['chargingPowerKw'] as num? ?? json['powerKw'] as num? ?? 0)
+            .toDouble(),
+    pricePerKwh: (json['pricePerKwh'] as num?)?.toDouble() ?? 0,
     currency: json['currency'] as String? ?? 'EUR',
     status: AvailabilityStatus.values.firstWhere(
-      (e) => e.name == json['status'],
+      (e) => e.name == json['status'].toString().toLowerCase(),
       orElse: () => AvailabilityStatus.unknown,
     ),
     description: json['description'] as String?,
@@ -285,7 +287,7 @@ class Station {
     rating: (json['rating'] as num?)?.toDouble(),
     ratingCount: (json['ratingCount'] as num?)?.toInt(),
     distanceMeters: (json['distanceMeters'] as num?)?.toDouble(),
-    ownerId: json['ownerId'] as String?,
+    ownerId: json['ownerId'] == null ? null : '${json['ownerId']}',
     isActive: json['isActive'] as bool? ?? true,
   );
 }
@@ -470,14 +472,14 @@ class CreateStationInput {
   final int slotMinutes;
 
   Map<String, dynamic> toJson() => {
-    'name': name,
+    'stationName': name,
     'address': address,
     'latitude': latitude,
     'longitude': longitude,
     'providerType': providerType.name,
     'accessType': accessType.name,
     'connectorType': connectorType.name,
-    'chargingPowerKw': chargingPowerKw,
+    'powerKw': chargingPowerKw,
     'pricePerKwh': pricePerKwh,
     'description': description,
     'accessInstructions': accessInstructions,

@@ -16,10 +16,18 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
+import org.springframework.security.oauth2.jwt.Jwt;
+import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationToken;
 
 class PlatformControllerTest {
     private MockMvc mockMvc;
     private VehicleService service;
+
+    private JwtAuthenticationToken auth() {
+        return new JwtAuthenticationToken(
+                Jwt.withTokenValue("test-token").header("alg", "none")
+                        .claim("sub", "user-1").build());
+    }
 
     @BeforeEach
     void setUp() {
@@ -36,7 +44,7 @@ class PlatformControllerTest {
         vehicle.setModel("Model 3");
         when(service.list("user-1")).thenReturn(List.of(vehicle));
 
-        mockMvc.perform(get("/api/vehicles").header("X-User-Sub", "user-1"))
+        mockMvc.perform(get("/api/vehicles").principal(auth()))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$", hasSize(1)))
                 .andExpect(jsonPath("$[0].vehicleType").value("CAR"))
@@ -51,7 +59,7 @@ class PlatformControllerTest {
         when(service.create(eq("user-1"), any(Vehicle.class))).thenReturn(vehicle);
 
         mockMvc.perform(post("/api/vehicles")
-                        .header("X-User-Sub", "user-1")
+                        .principal(auth())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
                                 {"vehicleType":"CAR","model":"Model 3"}
@@ -64,13 +72,13 @@ class PlatformControllerTest {
     @Test
     void requiresIdentityHeaderForUserSpecificRoute() throws Exception {
         mockMvc.perform(get("/api/vehicles"))
-                .andExpect(status().isBadRequest());
+                .andExpect(status().isUnauthorized());
         verifyNoInteractions(service);
     }
 
     @Test
     void returnsNoContentWhenVehicleIsDeleted() throws Exception {
-        mockMvc.perform(delete("/api/vehicles/7").header("X-User-Sub", "user-1"))
+        mockMvc.perform(delete("/api/vehicles/7").principal(auth()))
                 .andExpect(status().isNoContent());
         verify(service).delete("user-1", 7L);
     }

@@ -25,7 +25,7 @@ abstract interface class AuthRepository {
   });
 
   /// Confirms the email with a verification code.
-  Future<AuthUser> confirmEmail({required String email, required String code});
+  Future<void> confirmEmail({required String email, required String code});
 
   Future<void> resendVerificationCode({required String email});
 

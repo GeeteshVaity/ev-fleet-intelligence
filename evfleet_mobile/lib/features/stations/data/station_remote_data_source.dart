@@ -1,6 +1,7 @@
 import 'package:dio/dio.dart';
 
 import '../../../core/constants/api_constants.dart';
+import '../../../core/errors/app_exception.dart';
 import '../../../core/errors/error_handler.dart';
 import '../domain/station.dart';
 
@@ -64,9 +65,9 @@ class StationRemoteDataSource {
 
   Future<Station> setActive(String id, bool active) async {
     try {
-      final response = await _dio.patch<dynamic>(
+      final response = await _dio.put<dynamic>(
         '${ApiConstants.stationsPath}/$id/status',
-        data: {'isActive': active},
+        data: {'active': active},
       );
       return Station.fromJson(_asMap(response.data));
     } catch (error, stackTrace) {

@@ -67,7 +67,7 @@ class Vehicle {
     'id': id,
     'brand': brand,
     'model': model,
-    'type': type.name,
+    'vehicleType': type.name.toUpperCase(),
     'registrationNumber': registrationNumber,
     'batteryCapacityKwh': batteryCapacityKwh,
     'connectorType': connectorType.name,
@@ -75,15 +75,17 @@ class Vehicle {
   };
 
   factory Vehicle.fromJson(Map<String, dynamic> json) => Vehicle(
-    id: json['id'] as String,
-    brand: json['brand'] as String,
-    model: json['model'] as String,
+    id: '${json['id']}',
+    brand: json['brand'] as String? ?? '',
+    model: json['model'] as String? ?? '',
     type: VehicleType.values.firstWhere(
-      (e) => e.name == json['type'],
+      (e) =>
+          e.name ==
+          (json['type'] ?? json['vehicleType']).toString().toLowerCase(),
       orElse: () => VehicleType.car,
     ),
     registrationNumber: json['registrationNumber'] as String?,
-    batteryCapacityKwh: (json['batteryCapacityKwh'] as num).toDouble(),
+    batteryCapacityKwh: (json['batteryCapacityKwh'] as num?)?.toDouble() ?? 0,
     connectorType: ConnectorType.values.firstWhere(
       (e) => e.name == json['connectorType'],
       orElse: () => ConnectorType.type2,

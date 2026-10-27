@@ -128,12 +128,12 @@ class Booking {
   };
 
   factory Booking.fromJson(Map<String, dynamic> json) => Booking(
-    id: json['id'] as String,
-    reference: json['reference'] as String,
-    stationId: json['stationId'] as String,
+    id: '${json['id']}',
+    reference: json['reference'] as String? ?? 'EV-${json['id']}',
+    stationId: '${json['stationId']}',
     stationName: json['stationName'] as String? ?? '',
     stationAddress: json['stationAddress'] as String? ?? '',
-    vehicleId: json['vehicleId'] as String,
+    vehicleId: '${json['vehicleId']}',
     vehicleLabel: json['vehicleLabel'] as String? ?? '',
     startTime: DateTime.parse(json['startTime'] as String),
     endTime: DateTime.parse(json['endTime'] as String),
@@ -141,7 +141,9 @@ class Booking {
       (e) => e.name == json['status'],
       orElse: () => BookingStatus.pending,
     ),
-    createdAt: DateTime.parse(json['createdAt'] as String),
+    createdAt: DateTime.parse(
+      json['createdAt'] as String? ?? json['startTime'] as String,
+    ),
     estimatedEnergyKwh: (json['estimatedEnergyKwh'] as num?)?.toDouble(),
     estimatedCost: (json['estimatedCost'] as num?)?.toDouble(),
     currency: json['currency'] as String? ?? 'EUR',

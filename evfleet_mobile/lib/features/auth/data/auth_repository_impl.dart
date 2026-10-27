@@ -39,7 +39,7 @@ class AuthRepositoryImpl implements AuthRepository {
   }) => _cognito.signUp(fullName: fullName, email: email, password: password);
 
   @override
-  Future<AuthUser> confirmEmail({
+  Future<void> confirmEmail({
     required String email,
     required String code,
   }) => _cognito.confirmEmail(email: email, code: code);

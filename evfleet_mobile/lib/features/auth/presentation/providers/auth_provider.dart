@@ -149,7 +149,9 @@ class AuthNotifier extends Notifier<AuthState> {
   }
 
   Future<bool> confirmEmail({required String email, required String code}) {
-    return _run(() => _repository.confirmEmail(email: email, code: code));
+    return _runSilent(
+      () => _repository.confirmEmail(email: email, code: code),
+    );
   }
 
   Future<bool> resendVerificationCode({required String email}) async {

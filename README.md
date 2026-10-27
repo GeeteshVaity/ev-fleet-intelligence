@@ -9,17 +9,38 @@ The backend uses PostgreSQL by default. Configure these environment variables
 before starting it; no database password is committed:
 
 ```powershell
-$env:DB_URL = "jdbc:postgresql://localhost:5432/evfleetdb"
-$env:DB_USERNAME = "postgres"
-$env:DB_PASSWORD = "<local-password>"
+$env:SPRING_DATASOURCE_URL = "jdbc:postgresql://localhost:5432/evfleetdb"
+$env:SPRING_DATASOURCE_USERNAME = "postgres"
+$env:SPRING_DATASOURCE_PASSWORD = "<local-password>"
+$env:COGNITO_ENABLED = "true"
+$env:COGNITO_ISSUER_URI = "https://cognito-idp.<region>.amazonaws.com/<user-pool-id>"
 Set-Location backend
 .\mvnw.cmd spring-boot:run
 ```
 
-All user-owned endpoints currently use `X-User-Sub` as the authenticated
-Cognito-subject boundary. This keeps ownership and authorization explicit for
-local development; production deployment must replace this boundary with
-Spring Security Cognito JWT validation.
+For the complete backend/frontend setup, API smoke tests, Flutter device
+commands, and troubleshooting steps, see
+[LOCAL_APP_TESTING.md](./LOCAL_APP_TESTING.md).
+
+For the complete AWS infrastructure and deployment runbook, see
+[AWS_DEPLOYMENT_GUIDE.md](./AWS_DEPLOYMENT_GUIDE.md).
+
+When `COGNITO_ENABLED=true`, Spring Security validates Cognito access-token JWTs
+against `COGNITO_ISSUER_URI`. User-owned endpoints derive the subject from the
+validated JWT; `X-User-Sub` is not accepted. Keep these values in the process
+environment or deployment secret manager.
+
+Run the Flutter app with build-time configuration (replace placeholders with
+values from the Cognito console):
+
+```powershell
+Set-Location evfleet_mobile
+flutter run `
+  --dart-define=API_BASE_URL=http://localhost:8080 `
+  --dart-define=AWS_REGION=<region> `
+  --dart-define=COGNITO_USER_POOL_ID=<user-pool-id> `
+  --dart-define=COGNITO_APP_CLIENT_ID=<app-client-id>
+```
 
 ## API areas
 
@@ -45,11 +66,12 @@ Set-Location backend
 .\mvnw.cmd test
 ```
 
-Example local profile setup:
+Example authenticated profile setup (the bearer token must be a real Cognito
+access token; do not use `X-User-Sub`):
 
 ```powershell
 curl.exe -X POST http://localhost:8080/api/users/me `
-  -H "Content-Type: application/json" -H "X-User-Sub: demo-user" `
-  -d '{\"fullName\":\"Demo User\",\"email\":\"demo@example.com\"}'
-curl.exe http://localhost:8080/api/vehicles -H "X-User-Sub: demo-user"
+  -H "Content-Type: application/json" -H "Authorization: Bearer <access-token>" `
+  -d '{"fullName":"Demo User","email":"demo@example.com"}'
+curl.exe http://localhost:8080/api/vehicles -H "Authorization: Bearer <access-token>"
 ```

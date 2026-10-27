@@ -109,7 +109,7 @@ class MockAuthRepository implements AuthRepository {
   }
 
   @override
-  Future<AuthUser> confirmEmail({
+  Future<void> confirmEmail({
     required String email,
     required String code,
   }) async {

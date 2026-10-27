@@ -27,11 +27,12 @@ public class PlatformService {
         this.sessions=sessions; this.availability=availability; this.images=images;
     }
     public AppUser current(String sub) {
-        if (sub == null || sub.isBlank()) throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "X-User-Sub is required");
+        if (sub == null || sub.isBlank()) throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Authenticated Cognito subject is required");
         return users.findByCognitoSub(sub).orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Profile not found"));
     }
     public AppUser saveProfile(String sub, AppUser input) {
-        AppUser user=users.findByCognitoSub(sub).orElseGet(AppUser::new);
+        AppUser user = users.findByCognitoSub(sub)
+                .orElseGet(() -> users.findByEmailIgnoreCase(input.getEmail()).orElseGet(AppUser::new));
         user.setCognitoSub(sub); user.setFullName(input.getFullName()); user.setEmail(input.getEmail()); user.setPhone(input.getPhone()); user.touch();
         return users.save(user);
     }
@@ -62,6 +63,7 @@ public class PlatformService {
     public ChargingStation station(Long id){ return stations.findById(id).filter(ChargingStation::isActive).orElseThrow(()->notFound("Station")); }
     public ChargingStation saveStation(String sub, ChargingStation input){ requireRole(sub, "CHARGER_PROVIDER"); input.setOwnerUserId(current(sub).getId()); validateCoordinates(input); return stations.save(input); }
     public ChargingStation updateStation(String sub, Long id, ChargingStation input){ ChargingStation s=ownedStation(sub,id); input.setOwnerUserId(s.getOwnerUserId()); input.setActive(s.isActive()); validateCoordinates(input); return copyStation(s,input); }
+    public ChargingStation setStationActive(String sub, Long id, boolean active){ ChargingStation s=ownedStation(sub,id); s.setActive(active); return stations.save(s); }
     public void deactivateStation(String sub, Long id){ ChargingStation s=ownedStation(sub,id); s.setActive(false); stations.save(s); }
     private ChargingStation ownedStation(String sub,Long id){ ChargingStation s=stations.findById(id).orElseThrow(()->notFound("Station")); if(!Objects.equals(s.getOwnerUserId(),current(sub).getId())) throw forbidden(); return s; }
     private void requireRole(String sub, String required) {

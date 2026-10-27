@@ -1,7 +1,5 @@
 import 'package:dio/dio.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:shared_preferences/shared_preferences.dart';
-
 import '../constants/api_constants.dart';
 import 'dio_client.dart';
 
@@ -19,7 +17,6 @@ class BackendApiService {
       'PUT',
       ApiConstants.profilePath,
       data: {
-        'cognitoSub': await _sub(),
         'fullName': fullName,
         'email': email,
         'role': role,
@@ -104,7 +101,6 @@ class BackendApiService {
       'PUT',
       ApiConstants.profilePath,
       data: {
-        'cognitoSub': await _sub(),
         'fullName': fullName,
         'email': email,
         if (phone?.isNotEmpty == true) 'phone': phone,
@@ -127,17 +123,8 @@ class BackendApiService {
     return _dio.request<dynamic>(
       path,
       data: data,
-      options: Options(method: method, headers: {'X-User-Sub': await _sub()}),
+      options: Options(method: method),
     );
-  }
-
-  Future<String> _sub() async {
-    final prefs = await SharedPreferences.getInstance();
-    final existing = prefs.getString('account.sub');
-    if (existing != null && existing.isNotEmpty) return existing;
-    final value = 'mobile-${DateTime.now().microsecondsSinceEpoch}';
-    await prefs.setString('account.sub', value);
-    return value;
   }
 }
 

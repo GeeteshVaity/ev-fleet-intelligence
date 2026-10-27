@@ -7,6 +7,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../core/network/backend_api_service.dart';
 import '../core/errors/error_handler.dart';
+import '../features/auth/data/cognito_auth_service.dart';
 
 class AppColors {
   static const forest = Color(0xFF12372A);
@@ -36,6 +37,7 @@ class EvFleetApp extends ConsumerStatefulWidget {
 }
 
 class _EvFleetAppState extends ConsumerState<EvFleetApp> {
+  final _auth = CognitoAuthService();
   UserRole? _role;
   bool _onboardingComplete = false;
   bool _signedIn = false;
@@ -51,6 +53,15 @@ class _EvFleetAppState extends ConsumerState<EvFleetApp> {
     final prefs = await SharedPreferences.getInstance();
     final value = prefs.getString('onboarding.role');
     if (!mounted) return;
+    var signedIn = prefs.getBool('session.signed_in') ?? false;
+    if (_auth.isConfigured) {
+      try {
+        signedIn = await _auth.restoreSession() != null;
+      } catch (_) {
+        signedIn = false;
+      }
+    }
+    if (!mounted) return;
     setState(() {
       _role = value == 'CHARGER_PROVIDER'
           ? UserRole.chargerProvider
@@ -58,7 +69,7 @@ class _EvFleetAppState extends ConsumerState<EvFleetApp> {
           ? UserRole.vehicleOwner
           : null;
       _onboardingComplete = prefs.getBool('onboarding.completed') ?? false;
-      _signedIn = prefs.getBool('session.signed_in') ?? false;
+      _signedIn = signedIn;
       _ready = true;
     });
   }
@@ -70,7 +81,19 @@ class _EvFleetAppState extends ConsumerState<EvFleetApp> {
     _role = role;
   }
 
-  Future<String> _signIn(UserRole? selectedRole) async {
+  Future<String> _signIn({
+    required UserRole? selectedRole,
+    required String email,
+    required String password,
+  }) async {
+    if (_auth.isConfigured) {
+      final user = await _auth.signIn(email: email, password: password);
+      await ref.read(backendApiServiceProvider).saveProfile(
+        fullName: user.fullName,
+        email: user.email,
+        role: (_role ?? selectedRole ?? UserRole.vehicleOwner).wireValue,
+      );
+    }
     final prefs = await SharedPreferences.getInstance();
     if (_role == null && selectedRole != null) {
       await prefs.setString('onboarding.role', selectedRole.wireValue);
@@ -84,7 +107,15 @@ class _EvFleetAppState extends ConsumerState<EvFleetApp> {
   Future<void> _register({
     required String fullName,
     required String email,
+    required String password,
   }) async {
+    if (_auth.isConfigured) {
+      await _auth.signUp(fullName: fullName, email: email, password: password);
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString('pending_verification.email', email);
+      await prefs.setString('pending_verification.name', fullName);
+      return;
+    }
     final prefs = await SharedPreferences.getInstance();
     await ref
         .read(backendApiServiceProvider)
@@ -96,6 +127,9 @@ class _EvFleetAppState extends ConsumerState<EvFleetApp> {
   }
 
   Future<void> _signOut() async {
+    if (_auth.isConfigured) {
+      await _auth.signOut();
+    }
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool('session.signed_in', false);
     _signedIn = false;
@@ -166,14 +200,16 @@ class _EvFleetAppState extends ConsumerState<EvFleetApp> {
             !_signedIn &&
             location != '/signin' &&
             location != '/register' &&
-            location != '/role') {
+            location != '/role' &&
+            location != '/verify-email') {
           return '/signin';
         }
         if (_role == null &&
             !_signedIn &&
             location != '/signin' &&
             location != '/register' &&
-            location != '/role') {
+            location != '/role' &&
+            location != '/verify-email') {
           return '/signin';
         }
         if (_role != null &&
@@ -256,6 +292,12 @@ class _EvFleetAppState extends ConsumerState<EvFleetApp> {
         GoRoute(
           path: '/register',
           builder: (_, __) => RegisterScreen(onRegister: _register),
+        ),
+        GoRoute(
+          path: '/verify-email',
+          builder: (_, state) => VerifyEmailScreen(
+            email: state.uri.queryParameters['email'],
+          ),
         ),
       ],
       errorBuilder: (_, __) => const NotFoundScreen(),
@@ -2011,7 +2053,11 @@ class _ProviderAction extends StatelessWidget {
 class RegisterScreen extends StatefulWidget {
   const RegisterScreen({required this.onRegister, super.key});
 
-  final Future<void> Function({required String fullName, required String email})
+  final Future<void> Function({
+    required String fullName,
+    required String email,
+    required String password,
+  })
   onRegister;
 
   @override
@@ -2046,10 +2092,17 @@ class _RegisterScreenState extends State<RegisterScreen> {
       await widget.onRegister(
         fullName: _name.text.trim(),
         email: _email.text.trim(),
+        password: _password.text,
       );
       if (!mounted) return;
       setState(() => _busy = false);
-      context.push('/setup');
+      if (CognitoAuthService().isConfigured) {
+        context.push(
+          '/verify-email?email=${Uri.encodeComponent(_email.text.trim())}',
+        );
+      } else {
+        context.push('/setup');
+      }
     } catch (error) {
       if (!mounted) return;
       setState(() {
@@ -2169,7 +2222,11 @@ class SignInScreen extends StatefulWidget {
   });
 
   final UserRole? initialRole;
-  final Future<String> Function(UserRole? selectedRole) onSignIn;
+  final Future<String> Function({
+    required UserRole? selectedRole,
+    required String email,
+    required String password,
+  }) onSignIn;
 
   @override
   State<SignInScreen> createState() => _SignInScreenState();
@@ -2209,10 +2266,22 @@ class _SignInScreenState extends State<SignInScreen> {
       return;
     }
     setState(() => _busy = true);
-    final destination = await widget.onSignIn(_selectedRole);
-    if (!mounted) return;
-    setState(() => _busy = false);
-    context.pushReplacement(destination);
+    try {
+      final destination = await widget.onSignIn(
+        selectedRole: _selectedRole,
+        email: _email.text.trim(),
+        password: _password.text,
+      );
+      if (!mounted) return;
+      setState(() => _busy = false);
+      context.pushReplacement(destination);
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _busy = false);
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(errorMessageOf(error))));
+    }
   }
 
   @override
@@ -2306,6 +2375,104 @@ class _SignInScreenState extends State<SignInScreen> {
           ),
         ],
       ),
+    ),
+  );
+}
+
+class VerifyEmailScreen extends StatefulWidget {
+  const VerifyEmailScreen({required this.email, super.key});
+
+  final String? email;
+
+  @override
+  State<VerifyEmailScreen> createState() => _VerifyEmailScreenState();
+}
+
+class _VerifyEmailScreenState extends State<VerifyEmailScreen> {
+  final _code = TextEditingController();
+  final _auth = CognitoAuthService();
+  bool _busy = false;
+  String? _error;
+
+  @override
+  void dispose() {
+    _code.dispose();
+    super.dispose();
+  }
+
+  Future<void> _confirm() async {
+    final email = widget.email?.trim() ?? '';
+    if (email.isEmpty || _code.text.trim().isEmpty) {
+      setState(() => _error = 'Email and verification code are required.');
+      return;
+    }
+    setState(() {
+      _busy = true;
+      _error = null;
+    });
+    try {
+      await _auth.confirmEmail(email: email, code: _code.text.trim());
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Email verified. You can now sign in.')),
+        );
+        context.go('/signin');
+      }
+    } catch (error) {
+      if (mounted) setState(() => _error = errorMessageOf(error));
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _resend() async {
+    final email = widget.email?.trim() ?? '';
+    if (email.isEmpty) return;
+    setState(() {
+      _busy = true;
+      _error = null;
+    });
+    try {
+      await _auth.resendVerificationCode(email: email);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('A new verification code was sent.')),
+        );
+      }
+    } catch (error) {
+      if (mounted) setState(() => _error = errorMessageOf(error));
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) => Scaffold(
+    appBar: AppBar(title: const Text('Verify your email')),
+    body: ListView(
+      padding: const EdgeInsets.all(24),
+      children: [
+        Text('Enter the code sent to ${widget.email ?? 'your email address'}.'),
+        const SizedBox(height: 20),
+        if (_error != null)
+          Text(_error!, style: TextStyle(color: Colors.red.shade800)),
+        TextField(
+          controller: _code,
+          keyboardType: TextInputType.number,
+          decoration: const InputDecoration(labelText: 'Verification code'),
+        ),
+        const SizedBox(height: 20),
+        FilledButton(
+          onPressed: _busy ? null : _confirm,
+          child: _busy
+              ? const CircularProgressIndicator()
+              : const Text('Verify email'),
+        ),
+        TextButton(
+          onPressed: _busy ? null : _resend,
+          child: const Text('Resend code'),
+        ),
+      ],
     ),
   );
 }
