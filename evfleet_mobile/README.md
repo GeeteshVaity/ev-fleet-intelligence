@@ -11,6 +11,26 @@ flutter pub get
 flutter run --dart-define=API_BASE_URL=http://localhost:8080
 ```
 
+For a real Cognito session, provide the existing User Pool values at run time:
+
+```powershell
+flutter run `
+  --dart-define=API_BASE_URL=http://localhost:8080 `
+  --dart-define=COGNITO_USER_POOL_ID=<region>_<user-pool-id> `
+  --dart-define=AWS_REGION=<region> `
+  --dart-define=COGNITO_APP_CLIENT_ID=<public-app-client-id>
+```
+
+The app sends Cognito access tokens (not ID tokens) as bearer credentials.
+The backend requires the matching issuer
+`https://cognito-idp.<region>.amazonaws.com/<user-pool-id>`, discovers its
+signing keys, and rejects expired, wrong-issuer, invalid-signature, and ID
+tokens. Never put a client secret or AWS credentials in Flutter build defines.
+
+For Flutter web, set the backend `FRONTEND_ORIGIN` to the exact browser origin
+shown by the Flutter dev server (for example `http://localhost:3000`); do not
+use `*`. Native Android and iOS clients do not require browser CORS.
+
 When running on an Android emulator, the app automatically maps `localhost` to
 the host machine's `10.0.2.2` address. For a physical device, use the
 development computer's LAN address instead, for example:
