@@ -12,8 +12,8 @@ needed to install and run it locally.
 | DevTools | 2.60.0 | Flutter debugging |
 | Android SDK Platform | Android 36 (`android-36`) | Android compilation |
 | Android Build Tools | 36.0.0 | Android packaging |
-| Android Gradle Plugin | 9.1.0 | `evfleet_mobile/android/settings.gradle.kts` |
-| Gradle wrapper | 9.3.1 | `evfleet_mobile/android/gradle/wrapper/gradle-wrapper.properties` |
+| Android Gradle Plugin | 9.1.0 | `frontend/android/settings.gradle.kts` |
+| Gradle wrapper | 9.3.1 | `frontend/android/gradle/wrapper/gradle-wrapper.properties` |
 | Kotlin Gradle plugin | 2.4.0 | Android build |
 | Java for Android | JDK 17 | Android Gradle and Kotlin compilation |
 | Java for backend | JDK 21 | Spring Boot backend (`backend/pom.xml`) |
@@ -114,14 +114,14 @@ Use the actual installation directory on the computer.
 From the repository root:
 
 ```powershell
-Set-Location .\evfleet_mobile
+Set-Location .\frontend
 flutter pub get
 ```
 
 The Dart SDK constraint is `^3.13.5`. The main application dependencies are
 Riverpod, GoRouter, Dio, secure storage, Geolocator, cached network images,
 SharedPreferences, and Intl; their constraints are recorded in
-`evfleet_mobile/pubspec.yaml`.
+`frontend/pubspec.yaml`.
 
 ## Run the Android app
 
@@ -140,7 +140,7 @@ SharedPreferences, and Intl; their constraints are recorded in
 5. Start the app using that address:
 
    ```powershell
-   Set-Location .\evfleet_mobile
+   Set-Location .\frontend
    flutter run -d <device-id> `
      --dart-define=API_BASE_URL=http://<computer-lan-ip>:8080
    ```
@@ -157,7 +157,7 @@ SharedPreferences, and Intl; their constraints are recorded in
 The Android emulator reaches the host computer through `10.0.2.2`:
 
 ```powershell
-Set-Location .\evfleet_mobile
+Set-Location .\frontend
 flutter run -d emulator-5554 `
   --dart-define=API_BASE_URL=http://10.0.2.2:8080
 ```
@@ -168,7 +168,7 @@ For a physical phone, always use the computer's LAN address instead.
 ### Desktop or web
 
 ```powershell
-Set-Location .\evfleet_mobile
+Set-Location .\frontend
 flutter run -d windows `
   --dart-define=API_BASE_URL=http://localhost:8080
 ```
@@ -201,7 +201,7 @@ port 8080.
 
 ## Validation commands
 
-Run these from `evfleet_mobile`:
+Run these from `frontend`:
 
 ```powershell
 flutter analyze

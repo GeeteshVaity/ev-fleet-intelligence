@@ -84,6 +84,10 @@ public class SecurityConfig {
                         .requestMatchers(HttpMethod.OPTIONS, "/**").permitAll()
                         // Health check and error mapping
                         .requestMatchers("/actuator/health", "/error").permitAll()
+                        // Provider-owned listings must never fall through to the
+                        // public {id} pattern below, which matches any single
+                        // path segment (including the literal "mine").
+                        .requestMatchers(HttpMethod.GET, "/api/stations/mine").authenticated()
                         // Stations list and nearby are intentionally public (discovery experience)
                         .requestMatchers(HttpMethod.GET, "/api/stations", "/api/stations/nearby",
                                 "/api/stations/{id}", "/api/stations/{id}/availability")

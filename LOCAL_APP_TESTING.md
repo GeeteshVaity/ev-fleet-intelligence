@@ -159,7 +159,7 @@ curl.exe -i "http://localhost:8080/api/stations/nearby?latitude=19.0760&longitud
 Open a second PowerShell terminal at the repository root:
 
 ```powershell
-Set-Location .\evfleet_mobile
+Set-Location .\frontend
 flutter pub get
 flutter devices
 ```
@@ -221,7 +221,7 @@ and authentication is explicitly demo-mode until Cognito is configured.
 
 ## 7. Frontend validation and tests
 
-Run from `evfleet_mobile`:
+Run from `frontend`:
 
 ```powershell
 dart format lib test
@@ -266,4 +266,4 @@ Use this order for a full local check:
 
 - [Root project README](./README.md)
 - [Flutter Android setup](./FLUTTER_ANDROID_SETUP.md)
-- [Flutter project README](./evfleet_mobile/README.md)
+- [Flutter project README](./frontend/README.md)

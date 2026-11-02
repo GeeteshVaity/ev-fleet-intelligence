@@ -11,8 +11,8 @@ public class BookingService {
     public Booking create(String sub, Booking booking) { return platform.createBooking(sub, booking); }
     public List<Booking> list(String sub) { return platform.bookings(sub); }
     public Booking get(String sub, Long id) { return platform.booking(sub, id); }
-    public Booking cancel(String sub, Long id) { return platform.transition(sub, id, "CANCELLED"); }
-    public Booking confirm(String sub, Long id) { return platform.transition(sub, id, "CONFIRMED"); }
-    public Booking reject(String sub, Long id) { return platform.transition(sub, id, "REJECTED"); }
+    public Booking cancel(String sub, Long id) { return platform.cancelBooking(sub, id); }
+    public Booking confirm(String sub, Long id) { return platform.decideBooking(sub, id, "CONFIRMED"); }
+    public Booking reject(String sub, Long id) { return platform.decideBooking(sub, id, "REJECTED"); }
     public List<Booking> stationBookings(String sub, Long stationId) { return platform.stationBookings(sub, stationId); }
 }

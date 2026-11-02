@@ -28,19 +28,22 @@ be completed before calling the system production-ready.
 
 ## 0. Read this before deploying
 
-The repository currently has these limitations:
+The repository is deployable with the following remaining product limitations:
 
-1. Local development uses `X-User-Sub` as an identity boundary. This is not
-   production authentication. Before production, validate Cognito JWTs in
-   Spring Security and derive the user subject from the validated token.
+1. Production must set `COGNITO_ENABLED=true` and a valid
+   `COGNITO_ISSUER_URI`. Protected requests derive ownership from the verified
+   Cognito access-token `sub`; client-supplied user IDs and `X-User-Sub` are
+   not accepted.
 2. The active Flutter demo entry point still contains in-memory home, station,
    booking, and vehicle data. The remote repositories are available, but the
    active screens must be migrated to use them before a production client can
    be considered fully connected.
 3. Station image upload currently returns local metadata. Implement an S3
    presigned upload adapter before enabling image uploads in production.
-4. The backend currently uses Hibernate schema auto-update locally. Production
-   should use versioned database migrations and `ddl-auto=validate`.
+4. Local development may use Hibernate `ddl-auto=update`. The `prod` profile
+   enables Flyway and `ddl-auto=validate`; it creates the initial schema on an
+   empty database and baselines a compatible existing schema without dropping
+   data.
 5. The commands below use placeholders. Never commit passwords, private keys,
    Cognito secrets, or AWS access keys.
 
@@ -226,10 +229,11 @@ private EC2 network or use a controlled bastion/Session Manager workflow.
 
 Before production data exists:
 
-1. Add Flyway or Liquibase to `backend/pom.xml`.
-2. Create an initial migration representing the current entities and indexes.
-3. Run migrations against a disposable RDS staging database.
-4. Change production configuration to:
+1. Build the backend with the `prod` profile.
+2. Run the included `V1__create_initial_schema.sql` migration against a
+   disposable RDS staging database first.
+3. Confirm the schema matches the existing database before production startup.
+4. Production configuration uses:
 
 ```properties
 spring.jpa.hibernate.ddl-auto=validate
@@ -240,9 +244,8 @@ spring.jpa.properties.hibernate.format_sql=false
 5. Never use `ddl-auto=update` against production.
 6. Back up the database before every migration.
 
-If migration tooling has not been added yet, use a staging database for the
-first deployment only and treat that deployment as a pre-production
-environment, not a finished production release.
+The migration is non-destructive. Back up an existing database before startup
+and review any validation error rather than changing `ddl-auto` to `update`.
 
 ## 7. Create Cognito authentication
 
@@ -515,7 +518,7 @@ ev-fleet-production-web-<account-id>
 Build the web client:
 
 ```powershell
-Set-Location .\evfleet_mobile
+Set-Location .\frontend
 flutter pub get
 flutter build web --release `
   --dart-define=API_BASE_URL=https://api.example.com `
@@ -572,7 +575,7 @@ Before creating a release build:
 Build an APK for internal testing:
 
 ```powershell
-Set-Location .\evfleet_mobile
+Set-Location .\frontend
 flutter build apk --release `
   --dart-define=API_BASE_URL=https://api.example.com `
   --dart-define=AWS_REGION=ap-south-1 `
@@ -703,7 +706,7 @@ Set-Location .\backend
 Flutter checks:
 
 ```powershell
-Set-Location .\evfleet_mobile
+Set-Location .\frontend
 flutter pub get
 flutter analyze
 flutter test

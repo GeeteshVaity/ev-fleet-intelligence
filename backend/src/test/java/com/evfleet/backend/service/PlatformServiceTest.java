@@ -5,6 +5,7 @@ import com.evfleet.backend.model.ChargingStation;
 import com.evfleet.backend.model.Vehicle;
 import com.evfleet.backend.model.Booking;
 import com.evfleet.backend.repository.*;
+import com.evfleet.backend.controller.UserController;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -42,6 +43,7 @@ class PlatformServiceTest {
         user.setCognitoSub("user-1");
         user.setFullName("Test User");
         user.setEmail("test@example.com");
+        user.setRole("VEHICLE_OWNER");
         lenient().when(users.findByCognitoSub("user-1")).thenReturn(Optional.of(user));
     }
 
@@ -68,6 +70,31 @@ class PlatformServiceTest {
                 .isInstanceOf(ResponseStatusException.class)
                 .hasMessageContaining("model is required");
         verify(vehicles, never()).save(any());
+    }
+
+    @Test
+    void createsProfileUsingVerifiedSubjectAndDoesNotReassignByEmail() {
+        when(users.findByCognitoSub("new-sub")).thenReturn(Optional.empty());
+        when(users.save(any(AppUser.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        AppUser result = service.saveProfile("new-sub",
+                new UserController.ProfileRequest("New User", "new@example.com", null, "VEHICLE_OWNER"));
+
+        assertThat(result.getCognitoSub()).isEqualTo("new-sub");
+        assertThat(result.getEmail()).isEqualTo("new@example.com");
+        assertThat(result.getRole()).isEqualTo("VEHICLE_OWNER");
+        verify(users).save(result);
+    }
+
+    @Test
+    void rejectsChangingAnExistingProfileRole() {
+        user.setRole("VEHICLE_OWNER");
+
+        assertThatThrownBy(() -> service.saveProfile("user-1",
+                new UserController.ProfileRequest("Test User", "test@example.com", null, "CHARGER_PROVIDER")))
+                .isInstanceOf(ResponseStatusException.class)
+                .hasMessageContaining("Role cannot be changed");
+        verify(users, never()).save(any());
     }
 
     @Test
@@ -176,6 +203,202 @@ class PlatformServiceTest {
                 .isInstanceOf(ResponseStatusException.class)
                 .hasMessageContaining("already booked");
         verify(bookings, never()).save(any());
+    }
+
+    // -----------------------------------------------------------------------
+    // Role enforcement: a profile must have exactly one role before it can
+    // create role-specific records.
+    // -----------------------------------------------------------------------
+
+    @Test
+    void rejectsVehicleCreationWhenProfileHasNoRole() {
+        AppUser roleLess = new AppUser();
+        roleLess.setCognitoSub("user-2");
+        roleLess.setFullName("No Role");
+        roleLess.setEmail("norole@example.com");
+        setId(roleLess, 2L);
+        when(users.findByCognitoSub("user-2")).thenReturn(Optional.of(roleLess));
+        Vehicle input = new Vehicle();
+        input.setVehicleType("CAR");
+        input.setModel("Model 3");
+
+        assertThatThrownBy(() -> service.saveVehicle("user-2", input))
+                .isInstanceOf(ResponseStatusException.class)
+                .hasMessageContaining("Assign a profile role");
+        verify(vehicles, never()).save(any());
+    }
+
+    @Test
+    void rejectsStationCreationForVehicleOwnerRole() {
+        setId(user, 1L);
+        ChargingStation input = station(new BigDecimal("18.5204"), new BigDecimal("73.8567"));
+        input.setProviderType("HOUSEHOLD");
+        input.setAccessType("PUBLIC");
+        input.setConnectorType("Type 2");
+
+        assertThatThrownBy(() -> service.saveStation("user-1", input))
+                .isInstanceOf(ResponseStatusException.class)
+                .hasMessageContaining("Not authorized");
+        verify(stations, never()).save(any());
+    }
+
+    @Test
+    void allowsStationCreationForProviderRole() {
+        user.setRole("CHARGER_PROVIDER");
+        setId(user, 1L);
+        ChargingStation input = station(new BigDecimal("18.5204"), new BigDecimal("73.8567"));
+        input.setProviderType("HOUSEHOLD");
+        input.setAccessType("PUBLIC");
+        input.setConnectorType("Type 2");
+        when(stations.save(input)).thenReturn(input);
+
+        ChargingStation saved = service.saveStation("user-1", input);
+
+        assertThat(saved.getOwnerUserId()).isEqualTo(1L);
+    }
+
+    // -----------------------------------------------------------------------
+    // Booking transitions: only the provider decides, only the seeker cancels.
+    // -----------------------------------------------------------------------
+
+    @Test
+    void seekerCannotConfirmOwnBooking() {
+        setId(user, 1L);
+        Booking booking = booking(7L, 8L);
+        booking.setSeekerUserId(1L);
+        setId(booking, 9L);
+        ChargingStation station = station(new BigDecimal("18.5204"), new BigDecimal("73.8567"));
+        station.setOwnerUserId(2L);
+        when(bookings.findById(9L)).thenReturn(Optional.of(booking));
+        when(stations.findById(8L)).thenReturn(Optional.of(station));
+
+        assertThatThrownBy(() -> service.decideBooking("user-1", 9L, "CONFIRMED"))
+                .isInstanceOf(ResponseStatusException.class)
+                .hasMessageContaining("Not authorized");
+        verify(bookings, never()).save(any());
+    }
+
+    @Test
+    void providerCanConfirmPendingBooking() {
+        setId(user, 2L);
+        Booking booking = booking(7L, 8L);
+        booking.setSeekerUserId(1L);
+        setId(booking, 9L);
+        ChargingStation station = station(new BigDecimal("18.5204"), new BigDecimal("73.8567"));
+        station.setOwnerUserId(2L);
+        when(bookings.findById(9L)).thenReturn(Optional.of(booking));
+        when(stations.findById(8L)).thenReturn(Optional.of(station));
+        when(bookings.save(booking)).thenReturn(booking);
+
+        Booking confirmed = service.decideBooking("user-1", 9L, "CONFIRMED");
+
+        assertThat(confirmed.getStatus()).isEqualTo("CONFIRMED");
+    }
+
+    @Test
+    void providerCannotCancelSeekerBooking() {
+        setId(user, 2L);
+        Booking booking = booking(7L, 8L);
+        booking.setSeekerUserId(1L);
+        setId(booking, 9L);
+        ChargingStation station = station(new BigDecimal("18.5204"), new BigDecimal("73.8567"));
+        station.setOwnerUserId(2L);
+        when(bookings.findById(9L)).thenReturn(Optional.of(booking));
+        when(stations.findById(8L)).thenReturn(Optional.of(station));
+
+        assertThatThrownBy(() -> service.cancelBooking("user-1", 9L))
+                .isInstanceOf(ResponseStatusException.class)
+                .hasMessageContaining("Not authorized");
+        verify(bookings, never()).save(any());
+    }
+
+    @Test
+    void seekerCancelsOwnPendingBooking() {
+        setId(user, 1L);
+        Booking booking = booking(7L, 8L);
+        booking.setSeekerUserId(1L);
+        setId(booking, 9L);
+        when(bookings.findById(9L)).thenReturn(Optional.of(booking));
+        when(bookings.save(booking)).thenReturn(booking);
+
+        assertThat(service.cancelBooking("user-1", 9L).getStatus()).isEqualTo("CANCELLED");
+    }
+
+    // -----------------------------------------------------------------------
+    // Booking input validation and pricing.
+    // -----------------------------------------------------------------------
+
+    @Test
+    void rejectsBookingWithoutVehicleId() {
+        Booking booking = new Booking();
+        booking.setStationId(8L);
+        booking.setStartTime(Instant.parse("2026-10-22T10:00:00Z"));
+        booking.setEndTime(Instant.parse("2026-10-22T11:00:00Z"));
+
+        assertThatThrownBy(() -> service.createBooking("user-1", booking))
+                .isInstanceOf(ResponseStatusException.class)
+                .hasMessageContaining("vehicleId is required");
+    }
+
+    @Test
+    void estimatesCostFromDurationNotUnitPrice() {
+        setId(user, 1L);
+        Vehicle vehicle = new Vehicle();
+        vehicle.setOwnerUserId(1L);
+        vehicle.setConnectorType("Type 2");
+        setId(vehicle, 7L);
+        ChargingStation station = station(new BigDecimal("18.5204"), new BigDecimal("73.8567"));
+        station.setConnectorType("Type 2");
+        station.setPricePerKwh(new BigDecimal("10.00"));
+        setId(station, 8L);
+        when(vehicles.findById(7L)).thenReturn(Optional.of(vehicle));
+        when(stations.findById(8L)).thenReturn(Optional.of(station));
+        when(availability.existsByStationIdAndStartTimeLessThanAndEndTimeGreaterThan(any(), any(), any())).thenReturn(true);
+        when(bookings.existsByStationIdAndStatusInAndStartTimeLessThanAndEndTimeGreaterThan(any(), any(), any(), any())).thenReturn(false);
+        when(bookings.save(any(Booking.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        Booking twoHours = booking(7L, 8L);
+        twoHours.setEndTime(Instant.parse("2026-10-22T12:00:00Z"));
+
+        Booking created = service.createBooking("user-1", twoHours);
+
+        assertThat(created.getEstimatedCost()).isEqualByComparingTo("20.00");
+        assertThat(created.getStatus()).isEqualTo("PENDING");
+    }
+
+    @Test
+    void rejectsNearbyRadiusAboveTheCap() {
+        assertThatThrownBy(() -> service.nearby(18.5204, 73.8566, 500))
+                .isInstanceOf(ResponseStatusException.class)
+                .hasMessageContaining("Invalid coordinates or radius");
+        verify(stations, never()).findByActiveTrue();
+    }
+
+    // -----------------------------------------------------------------------
+    // Onboarding completion requires a role and a role-specific record.
+    // -----------------------------------------------------------------------
+
+    @Test
+    void rejectsOnboardingCompletionWithoutRoleRecords() {
+        setId(user, 1L);
+        when(vehicles.findByOwnerUserId(1L)).thenReturn(List.of());
+
+        assertThatThrownBy(() -> service.updateOnboarding("user-1", null, true, 1))
+                .isInstanceOf(ResponseStatusException.class)
+                .hasMessageContaining("Create at least one vehicle");
+        verify(users, never()).save(any());
+    }
+
+    @Test
+    void completesOnboardingWhenTheVehicleExists() {
+        setId(user, 1L);
+        Vehicle vehicle = new Vehicle();
+        vehicle.setOwnerUserId(1L);
+        when(vehicles.findByOwnerUserId(1L)).thenReturn(List.of(vehicle));
+        when(users.save(any(AppUser.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        AppUser updated = service.updateOnboarding("user-1", null, true, 1);
+
+        assertThat(updated.isOnboardingCompleted()).isTrue();
     }
 
     private Booking booking(Long vehicleId, Long stationId) {
