@@ -1,0 +1,6 @@
+{
+  "API_BASE_URL": "http://65.2.75.255:8080",
+  "AWS_REGION": "ap-south-1",
+  "COGNITO_USER_POOL_ID": "ap-south-1_5Kd0M6Ks1",
+  "COGNITO_APP_CLIENT_ID": "cu99248mdofvm2p56lccnit0h"
+}
