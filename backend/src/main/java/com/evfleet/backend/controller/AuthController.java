@@ -96,6 +96,10 @@ public class AuthController {
             response.put("fullName", user.getFullName());
             response.put("role", user.getRole());
             response.put("onboardingCompleted", user.isOnboardingCompleted());
+            response.put("businessName", user.getBusinessName());
+            response.put("providerType", user.getProviderType());
+            response.put("address", user.getAddress());
+            response.put("onboardingStep", user.getOnboardingStep());
         } catch (ResponseStatusException error) {
             if (error.getStatusCode().value() != 404) {
                 throw error;

@@ -28,7 +28,9 @@ Last reviewed: 2026-10-29. Describes the system **as implemented**, not as plann
 - **Client**: Flutter 3.47 / Dart, single active app (`frontend/lib/app/app.dart`), Riverpod providers, GoRouter, Material 3, `geolocator`, `dio`, `flutter_secure_storage`.
 - **API**: Spring Boot 4.1.1 on Java 21, stateless, `spring-boot-starter-oauth2-resource-server`.
 - **Identity**: Cognito User Pool with email verification; the API never stores credentials.
-- **Data**: PostgreSQL on RDS; `V1__create_initial_schema.sql` is the only migration.
+- **Data**: PostgreSQL on RDS; Flyway applies the versioned schema migrations
+  `V1__create_initial_schema.sql`, `V2__add_provider_profile_fields.sql`, and
+  `V3__add_integrity_constraints.sql`.
 - **Hosting**: EC2 + systemd behind an ALB (see `AWS_DEPLOYMENT_GUIDE.md`).
 
 ---
@@ -139,7 +141,9 @@ Constraints and indexes actually present:
 | `station_images` | `uk_image_key` (unique object key) |
 | `charger_availability` | none — overlap prevented in the service layer |
 
-There are deliberately **no foreign-key constraints** in V1; referential integrity is enforced by the service layer and by ownership checks. Deleting a vehicle therefore leaves its bookings in place.
+V3 adds foreign keys, workflow status checks, time checks, coordinate bounds,
+and positive numeric checks. Existing databases must be reviewed and cleaned
+before applying V3; production does not silently baseline an unknown schema.
 
 ---
 
@@ -216,7 +220,7 @@ Required environment variables are listed in `backend/README.md`. `DB_URL` is no
 | Role missing (legacy row) | Sign-in assigns the role once; write endpoints reject until then | Automatic on next sign-in, or backfill SQL |
 | Onboarding half-done | `onboardingCompleted=false` keeps the user on `/account-setup` across restarts | Resume; retry recreates the vehicle/station (no idempotency key) |
 | Slot taken between check and insert | Both requests can pass the overlap check | `409` path exists for sequential conflicts; add locking for concurrency |
-| Flyway finds a non-empty schema | Now baselined (`baseline-on-migrate=true`) instead of failing | Confirm the schema matches V1 |
+| Flyway finds a non-empty schema | Production fails rather than silently baselining it | Review the schema and perform a one-time, approved baseline before enabling production |
 | Missing `DB_URL` | Connects to `localhost:5432` | Set the variable; health check catches it |
 | S3 not configured | `501` from `upload-url` | Configure a bucket and presigned uploads (TASK-13) |
 

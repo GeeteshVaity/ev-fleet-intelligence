@@ -1,74 +1,118 @@
-# AWS deployment guide
+# EV Fleet Intelligence: AWS production deployment runbook
 
-This runbook deploys the EV Fleet Intelligence platform from an empty AWS
-account to a working environment. It uses the simplest production-shaped
-architecture that matches the current codebase:
+This runbook takes the **charging-provider application and Spring Boot API**
+from a new AWS account to a live, HTTPS-protected deployment with PostgreSQL,
+Cognito, private station-image storage, monitoring, and GitHub Actions
+deployment.
+
+The procedure uses the deployment artifacts currently in this repository:
+
+- Spring Boot API in `backend/`
+- Flyway migrations in `backend/src/main/resources/db/migration/`
+- Java 21 container in `backend/Dockerfile`
+- GitHub Actions build in `.github/workflows/ci.yml`
+- Manual, approval-gated production deployment in
+  `.github/workflows/deploy-production.yml`
+- Flutter charging-provider client in `mobile/charging_provider/`
+
+The vehicle-user Flutter application is intentionally not part of this
+deployment. Do not deploy it until it is complete.
+
+## 1. Target architecture
 
 ```text
-Flutter Android/web client
-          |
-          | HTTPS
-          v
-Route 53 -> ACM certificate -> Application Load Balancer
-                                      |
-                                      v
-                           EC2 Spring Boot API
-                                      |
-                                      v
-                              RDS PostgreSQL
+Charging-provider Flutter app
+        |
+        | HTTPS + Cognito access token
+        v
+Route 53 -> ACM -> internet-facing ALB
+                         |
+                         v
+              EC2 Docker host in private app subnet
+                         |
+              +----------+----------+
+              |                     |
+              v                     v
+       RDS PostgreSQL       Private S3 image bucket
+              |
+              v
+        Flyway migrations
 
-Flutter web static files -> S3 -> CloudFront
-Station images           -> S3 (private bucket + presigned URLs)
-User authentication      -> Amazon Cognito
-Logs and alarms          -> CloudWatch
+GitHub Actions -> OIDC -> AWS IAM role -> ECR -> SSM -> EC2
+                                                |
+                                                v
+                                      CloudWatch / ALB health checks
 ```
 
-The guide intentionally separates what is currently deployable from what must
-be completed before calling the system production-ready.
+### Production principles
 
-## 0. Read this before deploying
+1. The API is reachable only through the ALB. Do not expose port `8080`
+   publicly.
+2. RDS is private and accepts traffic only from the API security group.
+3. The S3 image bucket is private. The API creates short-lived presigned PUT
+   URLs.
+4. Cognito access tokens are validated by Spring Security. Never trust a
+   caller-supplied user ID or subject header.
+5. Production uses `ddl-auto=validate`; Flyway is the only schema change
+   mechanism.
+6. GitHub Actions uses OIDC and short-lived AWS role credentials. Do not add
+   AWS access keys to GitHub secrets.
+7. Passwords and database secrets belong in Secrets Manager or the deployment
+   host environment, never in Git.
 
-The repository is deployable with the following remaining product limitations:
+## 2. What is and is not included
 
-1. Production must set `COGNITO_ENABLED=true` and a valid
-   `COGNITO_ISSUER_URI`. Protected requests derive ownership from the verified
-   Cognito access-token `sub`; client-supplied user IDs and `X-User-Sub` are
-   not accepted.
-2. The active Flutter demo entry point still contains in-memory home, station,
-   booking, and vehicle data. The remote repositories are available, but the
-   active screens must be migrated to use them before a production client can
-   be considered fully connected.
-3. Station image upload currently returns local metadata. Implement an S3
-   presigned upload adapter before enabling image uploads in production.
-4. Local development may use Hibernate `ddl-auto=update`. The `prod` profile
-   enables Flyway and `ddl-auto=validate`; it creates the initial schema on an
-   empty database and baselines a compatible existing schema without dropping
-   data.
-5. The commands below use placeholders. Never commit passwords, private keys,
-   Cognito secrets, or AWS access keys.
+### Included
 
-Do not expose an EC2 instance directly to the internet when an ALB can be used.
-Do not put a database in a public subnet.
+- Cognito user-pool authentication.
+- Provider profile, station, availability, booking, charging-session, and
+  billing API deployment.
+- PostgreSQL on Amazon RDS.
+- Private S3 station-image bucket and presigned upload endpoint.
+- EC2 Docker runtime behind an ALB.
+- HTTPS with ACM and Route 53.
+- GitHub Actions validation, ECR image publishing, and SSM deployment.
+- Health checks, logs, backups, rollback, and smoke-test procedures.
 
-## 1. AWS account prerequisites
+### Current limitations to resolve before advertising all features
 
-Create or obtain:
+- The Flutter provider client must receive production values through
+  `--dart-define-from-file`; it does not contain production credentials.
+- The provider client still needs its image-picker flow wired to the backend
+  `POST /api/stations/{stationId}/images/upload-url` contract if image upload
+  is to be exposed in the UI.
+- The API stores an image key after the client calls `POST /images`; production
+  should add an S3 `HeadObject` verification before treating an object as
+  complete.
+- The deployment workflow deploys a new Docker container on one EC2 instance.
+  For high availability, replace this runtime with ECS/Fargate or an EC2
+  Auto Scaling Group before a strict zero-downtime requirement.
 
-- An AWS account with billing enabled.
-- A domain name, for example `example.com`.
-- A separate AWS account or at least separate AWS resources for staging and
-  production.
-- An administrator identity for initial setup.
-- A local installation of:
-  - AWS CLI v2
-  - Git
-  - Java 21
-  - Maven or the repository Maven wrapper
-  - Flutter and Dart
-  - OpenSSL
-  - SSH client
+Do not silently enable a limited feature in production. Record accepted
+limitations in the release approval.
 
-Configure the AWS CLI with an IAM user or, preferably, IAM Identity Center:
+## 3. Required tools and accounts
+
+Install on the operator workstation:
+
+- AWS CLI v2
+- Git
+- Java 21
+- Docker
+- Flutter/Dart compatible with `mobile/charging_provider/pubspec.yaml`
+- An SSH client only if Session Manager is unavailable
+
+Verify:
+
+```powershell
+aws --version
+docker --version
+java -version
+flutter --version
+git --version
+```
+
+Use an AWS IAM Identity Center user or another MFA-protected human identity:
 
 ```powershell
 aws configure sso
@@ -76,244 +120,235 @@ aws sts get-caller-identity
 aws configure list
 ```
 
-Set a deployment region and keep it consistent. The examples below use
-`ap-south-1`; change it everywhere if another region is required:
+Do not use the root user for daily work. Before creating resources:
+
+1. Enable MFA for human identities.
+2. Create an AWS Budget and billing alarm.
+3. Select one region and use it consistently. Examples below use
+   `ap-south-1`.
+4. Use separate AWS resources/accounts for staging and production.
+
+Set the operator region:
 
 ```powershell
 $env:AWS_REGION = "ap-south-1"
 aws configure set region $env:AWS_REGION
 ```
 
-Enable MFA on all human identities. Do not use the root user for deployments.
-Create a billing alarm before creating infrastructure.
+## 4. Choose names and record outputs
 
-## 2. Choose names and record them
-
-Use globally unique names for S3 buckets and stable names for other resources.
-Example naming:
+Choose names once. Keep the resulting IDs in a password manager or deployment
+system, not in this repository.
 
 ```text
-Project:       ev-fleet-intelligence
-Environment:   production
-AWS region:    ap-south-1
-API host:      api.example.com
-Web host:      app.example.com
-Database:      evfleetdb
-DB user:       evfleet_app
+Project:                  ev-fleet-intelligence
+Environment:              production
+Region:                   ap-south-1
+API hostname:             api.example.com
+Web hostname (optional):  app.example.com
+Database name:            evfleetdb
+Database app user:        evfleet_app
+ECR repository:           ev-fleet-intelligence-api
+Image bucket:             ev-fleet-production-station-images-<account-id>
+Web bucket (optional):    ev-fleet-production-web-<account-id>
 ```
-
-Record these values in a password manager or a secure deployment system, not
-in Git:
-
-- AWS account ID
-- Region
-- VPC ID and subnet IDs
-- RDS endpoint
-- EC2 instance ID and private IP
-- ALB DNS name
-- API and web DNS names
-- Cognito user pool ID
-- Cognito app client ID
-- S3 bucket names
-
-## 3. Create the network
-
-Use the default VPC only for a temporary proof of concept. For production,
-create a dedicated VPC with:
-
-- CIDR: `10.20.0.0/16`
-- Two public subnets in different Availability Zones for the ALB.
-- Two private application subnets in different Availability Zones for EC2.
-- Two private database subnets in different Availability Zones for RDS.
-- Internet Gateway for public subnets.
-- NAT Gateway for private application subnets if the backend needs outbound
-  internet access.
-- Route tables matching the subnet roles.
-
-The AWS Console path is:
-
-```text
-VPC -> Your VPCs -> Create VPC
-VPC -> Subnets -> Create subnet
-VPC -> Internet gateways -> Create and attach
-VPC -> NAT gateways -> Create
-VPC -> Route tables -> Create and associate
-```
-
-For a first deployment, the VPC wizard can create the public/private subnet
-layout. Confirm that the RDS subnets are private and have no route to an
-Internet Gateway.
-
-## 4. Create security groups
-
-Create separate security groups with only these inbound rules:
-
-### ALB security group
-
-| Protocol | Port | Source |
-|---|---:|---|
-| TCP | 80 | `0.0.0.0/0` |
-| TCP | 443 | `0.0.0.0/0` |
-
-### EC2 API security group
-
-| Protocol | Port | Source |
-|---|---:|---|
-| TCP | 8080 | ALB security group only |
-| SSH 22 | Your fixed administrator IP only, temporary |
-
-### RDS security group
-
-| Protocol | Port | Source |
-|---|---:|---|
-| TCP | 5432 | EC2 API security group only |
-
-Never allow `5432` from `0.0.0.0/0`. Remove or restrict SSH after validating
-Session Manager access.
-
-## 5. Create the production database in RDS
-
-In the AWS Console:
-
-```text
-RDS -> Databases -> Create database
-```
-
-Recommended settings:
-
-1. Engine: PostgreSQL.
-2. Version: use a supported version compatible with the local project.
-3. Template: Production.
-4. Availability: Multi-AZ for production.
-5. DB instance: start with a small burstable class and scale after observing
-   CPU and connections.
-6. Storage: General Purpose SSD, autoscaling enabled with a safe maximum.
-7. DB identifier: `ev-fleet-production`.
-8. Master username: do not use `postgres`; use an administrative name.
-9. Password: generate and store it in AWS Secrets Manager.
-10. VPC: the dedicated VPC.
-11. DB subnet group: the two private database subnets.
-12. Public access: `No`.
-13. VPC security group: the RDS security group.
-14. Initial database name: `evfleetdb`.
-15. Encryption: enabled with the AWS managed key initially or a customer
-    managed KMS key if required.
-16. Automated backups: enabled, with a retention period appropriate for the
-    business.
-17. Deletion protection: enabled for production.
-18. Log exports: PostgreSQL logs and upgrade logs to CloudWatch.
-
-Store these values in Secrets Manager as a JSON secret named, for example,
-`ev-fleet/production/database`:
-
-```json
-{
-  "host": "replace-with-rds-endpoint",
-  "port": 5432,
-  "database": "evfleetdb",
-  "username": "evfleet_app",
-  "password": "replace-with-generated-password"
-}
-```
-
-After RDS becomes available, copy its endpoint. The JDBC URL will be:
-
-```text
-jdbc:postgresql://<rds-endpoint>:5432/evfleetdb
-```
-
-Do not manually open the database to the internet to test it. Test from the
-private EC2 network or use a controlled bastion/Session Manager workflow.
-
-## 6. Prepare database schema migrations
-
-Before production data exists:
-
-1. Build the backend with the `prod` profile.
-2. Run the included `V1__create_initial_schema.sql` migration against a
-   disposable RDS staging database first.
-3. Confirm the schema matches the existing database before production startup.
-4. Production configuration uses:
-
-```properties
-spring.jpa.hibernate.ddl-auto=validate
-spring.jpa.show-sql=false
-spring.jpa.properties.hibernate.format_sql=false
-```
-
-5. Never use `ddl-auto=update` against production.
-6. Back up the database before every migration.
-
-The migration is non-destructive. Back up an existing database before startup
-and review any validation error rather than changing `ddl-auto` to `update`.
-
-## 7. Create Cognito authentication
-
-In the AWS Console:
-
-```text
-Cognito -> User pools -> Create user pool
-```
-
-Configure:
-
-1. Sign-in identifier: email.
-2. Required attributes: email and any profile fields the app needs.
-3. Password policy suitable for the application.
-4. MFA according to the product security requirement.
-5. Email delivery: Cognito managed email for development, SES for production.
-6. User pool name: `ev-fleet-production`.
-7. Create an app client without a client secret for the public Flutter app.
-8. Enable authorization code grant with PKCE.
-9. Configure scopes such as `openid`, `email`, and `profile`.
-10. Add exact callback URLs for the web app and mobile redirect scheme.
-11. Add exact sign-out URLs.
-12. Configure a Cognito domain, for example
-    `auth.example.com` or an AWS-generated Cognito domain.
 
 Record:
 
+- AWS account ID
+- VPC and subnet IDs
+- ALB name and DNS name
+- EC2 instance ID
+- RDS endpoint
+- RDS security group ID
+- Cognito user-pool ID and app-client ID
+- S3 bucket names
+- ACM certificate ARN
+- Route 53 hosted-zone ID
+- ECR repository URI
+- GitHub OIDC role ARN
+
+## 5. Create the network first
+
+Use a dedicated VPC. Do not use the default VPC for the final production
+environment.
+
+Recommended layout:
+
+| Component | Subnets | Internet route |
+|---|---|---|
+| ALB | Two public subnets in different AZs | Internet Gateway |
+| EC2 API | Two private application subnets | NAT Gateway if outbound access is needed |
+| RDS | Two private database subnets | No Internet Gateway route |
+
+Example CIDR plan:
+
 ```text
-COGNITO_USER_POOL_ID=ap-south-1_xxxxxxxx
+VPC:             10.20.0.0/16
+Public AZ-a:     10.20.1.0/24
+Public AZ-b:     10.20.2.0/24
+Private app AZ-a:10.20.11.0/24
+Private app AZ-b:10.20.12.0/24
+Private DB AZ-a: 10.20.21.0/24
+Private DB AZ-b: 10.20.22.0/24
+```
+
+Console sequence:
+
+1. VPC -> Create VPC.
+2. Create six subnets in two Availability Zones.
+3. Attach an Internet Gateway to the VPC.
+4. Create public and private route tables.
+5. Associate public subnets with the public route table.
+6. Associate application and database subnets with private route tables.
+7. Create a NAT Gateway in one public subnet if the private EC2 host needs
+   outbound package/image access. Use one NAT Gateway per AZ when availability
+   justifies the cost.
+8. Create an RDS DB subnet group using both private database subnets.
+
+Before continuing, verify that a database subnet has no route to an Internet
+Gateway.
+
+## 6. Create security groups
+
+Create separate security groups. Reference security groups rather than broad
+CIDR ranges wherever possible.
+
+### `ev-fleet-alb-sg`
+
+Inbound:
+
+| Protocol | Port | Source |
+|---|---:|---|
+| TCP | 80 | `0.0.0.0/0` and `::/0` |
+| TCP | 443 | `0.0.0.0/0` and `::/0` |
+
+Outbound can remain the default restricted policy required by your
+organization, but it must reach the API target on port `8080`.
+
+### `ev-fleet-api-sg`
+
+Inbound:
+
+| Protocol | Port | Source |
+|---|---:|---|
+| TCP | 8080 | `ev-fleet-alb-sg` only |
+
+Do not open `8080` to the Internet. Do not open SSH unless temporarily needed
+from a fixed administrator IP. Prefer Session Manager.
+
+### `ev-fleet-rds-sg`
+
+Inbound:
+
+| Protocol | Port | Source |
+|---|---:|---|
+| TCP | 5432 | `ev-fleet-api-sg` only |
+
+Never permit PostgreSQL from `0.0.0.0/0`.
+
+## 7. Create the Cognito user pool
+
+The backend expects Cognito access-token JWTs and validates the issuer,
+signature, expiry, token use, and client ID. The Flutter app needs a public
+client; a mobile public client must not have a client secret.
+
+Console sequence:
+
+1. Cognito -> User pools -> Create user pool.
+2. Name it `ev-fleet-production`.
+3. Select email as the sign-in identifier.
+4. Require email verification.
+5. Configure a production password policy.
+6. Choose MFA according to the product requirement.
+7. Use Amazon SES for production email delivery after verifying the sending
+   identity and production sending limits.
+8. Create an app client with **no client secret**.
+9. Enable only the flows required by the client. If the hosted UI is used,
+   enable authorization-code flow with PKCE.
+10. Configure exact callback and sign-out URLs. Do not use wildcard URLs.
+11. Create a Cognito domain only if hosted UI/OAuth is used.
+12. Record the user-pool ID, region, and public app-client ID.
+
+Required values:
+
+```text
 AWS_REGION=ap-south-1
-COGNITO_APP_CLIENT_ID=xxxxxxxx
-COGNITO_REDIRECT_URI=<exact-callback-url>
+COGNITO_USER_POOL_ID=ap-south-1_xxxxxxxx
+COGNITO_APP_CLIENT_ID=public-client-id
+COGNITO_ISSUER_URI=https://cognito-idp.ap-south-1.amazonaws.com/ap-south-1_xxxxxxxx
 ```
 
-### Backend Cognito validation
+Do not place `COGNITO_CLIENT_SECRET` in the Flutter app. If a hosted UI
+integration ever requires a confidential client, keep it server-side and use a
+separate client from the mobile public client.
 
-The backend must validate the JWT issuer, signature, expiration, audience/client
-ID, and token use. Add Spring Security resource-server JWT support and configure:
+## 8. Create IAM roles before compute
+
+Create these roles with least privilege.
+
+### 8.1 EC2 instance role
+
+Attach:
+
+- `AmazonSSMManagedInstanceCore`
+- A custom policy allowing `secretsmanager:GetSecretValue` only for the
+  production database secret.
+- A custom S3 policy allowing only required operations under the station-image
+  bucket/prefix.
+- CloudWatch log delivery permissions if using the CloudWatch agent.
+- ECR pull permissions for the single repository.
+
+Example S3 permissions:
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": [
+        "s3:PutObject",
+        "s3:GetObject",
+        "s3:HeadObject",
+        "s3:DeleteObject"
+      ],
+      "Resource": "arn:aws:s3:::ev-fleet-production-station-images-ACCOUNT_ID/stations/*"
+    }
+  ]
+}
+```
+
+Add `s3:ListBucket` only if the application requires it, and restrict it with
+an `s3:prefix` condition. Do not attach `AdministratorAccess`.
+
+### 8.2 GitHub Actions OIDC role
+
+Create a role trusted by GitHub's OIDC provider:
 
 ```text
-Issuer:
-https://cognito-idp.<region>.amazonaws.com/<user-pool-id>
+https://token.actions.githubusercontent.com
 ```
 
-Then replace every use of the caller-supplied `X-User-Sub` header in production
-authorization logic with the authenticated JWT subject. A client must never be
-able to choose another user's subject by changing a header.
+Trust only:
 
-Keep the `X-User-Sub` path only behind an explicit local-development profile if
-it is still needed for tests.
+- The exact GitHub organization/user.
+- The exact repository `GeeteshVaity/ev-fleet-intelligence`.
+- The exact branch/environment subject, especially for production.
 
-## 8. Create IAM roles
+Allow only what the workflows need:
 
-Create an EC2 instance role, for example `ev-fleet-api-production-role`, with
-least-privilege permissions:
+- ECR login and push to the API repository.
+- `ssm:SendCommand` and `ssm:GetCommandInvocation` for the production EC2
+  instance.
+- Read-only ECR repository inspection.
 
-- Read only the specific database secret in Secrets Manager.
-- Read/write only the required objects in the private station-image S3 bucket.
-- Write application logs and metrics to CloudWatch.
-- Use Systems Manager if SSH is being replaced.
-- No administrator access.
+Do not create long-lived `AWS_ACCESS_KEY_ID` or `AWS_SECRET_ACCESS_KEY`
+secrets for GitHub.
 
-Create separate roles for CI/CD and operations. Do not put long-lived AWS
-access keys in the EC2 filesystem or Flutter application.
+## 9. Create the private S3 station-image bucket
 
-## 9. Create the private S3 image bucket
-
-Create a bucket in the selected region:
+Create it in the same region as the backend:
 
 ```text
 ev-fleet-production-station-images-<account-id>
@@ -322,40 +357,134 @@ ev-fleet-production-station-images-<account-id>
 Configure:
 
 1. Block all public access.
-2. Bucket owner enforced object ownership.
-3. Default encryption with SSE-S3 or SSE-KMS.
+2. Object Ownership: Bucket owner enforced.
+3. Default encryption: SSE-S3 or SSE-KMS.
 4. Versioning enabled.
-5. Lifecycle rules for abandoned uploads and old versions.
-6. CORS limited to the deployed web origin if browser uploads are used.
-7. Bucket policy allowing only the EC2 role and the required upload flow.
+5. Lifecycle rule to expire incomplete multipart uploads.
+6. Lifecycle policy for old object versions.
+7. Bucket policy allowing only the API workload role.
+8. CORS only for exact production web origins if browser uploads are used.
 
-The backend should generate short-lived presigned PUT/GET URLs. Do not return
-AWS access keys to the Flutter app.
-
-## 10. Create the EC2 backend host
-
-In the AWS Console:
+The backend endpoint is:
 
 ```text
-EC2 -> Instances -> Launch instance
+POST /api/stations/{stationId}/images/upload-url
 ```
 
-Recommended starting settings:
+Request:
 
-1. Ubuntu LTS or Amazon Linux 2023.
-2. A current general-purpose ARM or x86 instance appropriate for the selected
-   Java build.
-3. Dedicated VPC private application subnet.
-4. No public IPv4 address in the production design.
-5. EC2 API security group.
-6. Instance role created above.
-7. Encrypted EBS volume.
-8. Detailed monitoring if required.
-9. Systems Manager enabled.
+```json
+{ "contentType": "image/jpeg" }
+```
 
-For a simpler first deployment, put the EC2 instance in a public subnet but
-allow port 8080 only from the ALB and use Session Manager instead of opening
-SSH. The RDS database must remain private.
+Response:
+
+```json
+{
+  "objectKey": "stations/123/<uuid>.jpg",
+  "uploadUrl": "https://...",
+  "expiresAt": "2026-..."
+}
+```
+
+The client uploads bytes with `PUT` to `uploadUrl`, then persists the returned
+object key through `POST /api/stations/{stationId}/images`.
+
+## 10. Create the RDS PostgreSQL database
+
+Console sequence:
+
+1. RDS -> Databases -> Create database.
+2. Engine: PostgreSQL.
+3. Choose a currently supported PostgreSQL version compatible with the
+   repository's PostgreSQL driver.
+4. Use Production template for production.
+5. Use Multi-AZ when the availability requirement justifies it.
+6. Enable storage encryption.
+7. Enable automated backups and point-in-time recovery.
+8. Enable deletion protection.
+9. Set a retention period appropriate for the business.
+10. Set Public access to `No`.
+11. Select the dedicated VPC and DB subnet group.
+12. Attach `ev-fleet-rds-sg`.
+13. Set initial database name to `evfleetdb`.
+14. Create a master/admin credential in Secrets Manager.
+
+Create a separate application database user with only the permissions needed by
+the application. Do not run the API as the RDS master user.
+
+Store the application credential in a Secrets Manager secret such as
+`ev-fleet/production/database`:
+
+```json
+{
+  "host": "ev-fleet-production.xxxxxx.ap-south-1.rds.amazonaws.com",
+  "port": 5432,
+  "database": "evfleetdb",
+  "username": "evfleet_app",
+  "password": "GENERATED_VALUE"
+}
+```
+
+Do not commit this JSON or print it in CI logs.
+
+## 11. Validate Flyway migrations on staging first
+
+The repository currently contains:
+
+```text
+V1__create_initial_schema.sql
+V2__add_provider_profile_fields.sql
+V3__add_integrity_constraints.sql
+```
+
+The production profile uses:
+
+```properties
+spring.jpa.hibernate.ddl-auto=validate
+spring.flyway.enabled=true
+spring.flyway.baseline-on-migrate=false
+```
+
+### Empty staging database
+
+1. Create a disposable RDS staging database or isolated PostgreSQL instance.
+2. Configure the backend with `SPRING_PROFILES_ACTIVE=prod`.
+3. Start the API once.
+4. Confirm Flyway applies V1, V2, and V3.
+5. Inspect the tables, constraints, indexes, and `flyway_schema_history`.
+6. Run the backend regression tests and API smoke tests.
+
+### Existing database
+
+Do not set `ddl-auto=update` to force a deployment through. Instead:
+
+1. Take a verified snapshot and logical backup.
+2. Compare the existing schema with V1 and V2.
+3. Resolve missing columns or incompatible data.
+4. Perform any one-time reviewed Flyway baseline procedure.
+5. Apply V3 only after checking existing rows satisfy its foreign keys and
+   checks.
+6. Restore the backup to a disposable database and rehearse the procedure.
+
+A production startup failure caused by schema validation is safer than silently
+changing production tables.
+
+## 12. Create the EC2 Docker host
+
+Use Amazon Linux 2023 or Ubuntu LTS in a private application subnet. Attach
+the EC2 instance role from Section 8.
+
+Recommended:
+
+- Current-generation general-purpose instance sized from load testing.
+- Encrypted EBS volume.
+- No public IPv4 address in the final design.
+- SSM agent enabled.
+- Detailed monitoring enabled if required.
+
+If the private subnet cannot reach ECR or package repositories, configure NAT
+or the required VPC endpoints. Do not make RDS public to solve this.
 
 Connect through Session Manager:
 
@@ -363,390 +492,546 @@ Connect through Session Manager:
 EC2 -> Instances -> select instance -> Connect -> Session Manager
 ```
 
-Install Java 21, Git, and required runtime tools. On Ubuntu, the exact package
-name can vary by release; verify:
+Install Docker and verify:
 
 ```bash
-java -version
+docker --version
+aws sts get-caller-identity
+aws ecr get-login-password --region ap-south-1
 ```
 
-Create a dedicated application user and directories:
+Create the runtime directory:
 
 ```bash
-sudo useradd --system --home /opt/ev-fleet --shell /usr/sbin/nologin evfleet
-sudo mkdir -p /opt/ev-fleet/releases /opt/ev-fleet/current
-sudo chown -R evfleet:evfleet /opt/ev-fleet
+sudo mkdir -p /etc/ev-fleet-intelligence
+sudo chmod 700 /etc/ev-fleet-intelligence
 ```
 
-Build the backend in CI or on a controlled build machine:
+Create `/etc/ev-fleet-intelligence/backend.env` with the values listed in
+Section 21. Restrict it:
+
+```bash
+sudo chown root:root /etc/ev-fleet-intelligence/backend.env
+sudo chmod 600 /etc/ev-fleet-intelligence/backend.env
+```
+
+The deployment workflow expects Docker and this exact env-file path.
+
+## 13. Create ECR
+
+Create a private ECR repository:
+
+```powershell
+aws ecr create-repository `
+  --repository-name ev-fleet-intelligence-api `
+  --image-scanning-configuration scanOnPush=true `
+  --image-tag-mutability IMMUTABLE `
+  --region ap-south-1
+```
+
+Enable lifecycle cleanup for unneeded old images, but retain every image tag
+used by an active deployment and its rollback target.
+
+The image is built from:
+
+```text
+backend/Dockerfile
+```
+
+The image contains the compiled JAR only; database credentials and AWS
+configuration are supplied at runtime.
+
+## 14. Configure the backend runtime environment
+
+The file `/etc/ev-fleet-intelligence/backend.env` must contain values like:
+
+```text
+SPRING_PROFILES_ACTIVE=prod
+DB_URL=jdbc:postgresql://<RDS_ENDPOINT>:5432/evfleetdb
+DB_USERNAME=evfleet_app
+DB_PASSWORD=<DATABASE_PASSWORD>
+DDL_AUTO=validate
+FLYWAY_ENABLED=true
+FLYWAY_BASELINE_ON_MIGRATE=false
+COGNITO_ENABLED=true
+COGNITO_ISSUER_URI=https://cognito-idp.ap-south-1.amazonaws.com/<USER_POOL_ID>
+COGNITO_CLIENT_ID=<COGNITO_PUBLIC_APP_CLIENT_ID>
+FRONTEND_ORIGIN=https://app.example.com
+AWS_REGION=ap-south-1
+S3_ENABLED=true
+S3_BUCKET=ev-fleet-production-station-images-<ACCOUNT_ID>
+S3_PRESIGN_EXPIRY_SECONDS=900
+SERVER_PORT=8080
+```
+
+Use the EC2 role and Secrets Manager integration to populate
+`DB_PASSWORD` rather than storing a permanent password when your operational
+platform supports it. If the env-file is used, rotate it through a controlled
+procedure and restart the container.
+
+Never set:
+
+```text
+COGNITO_CLIENT_SECRET
+AWS_ACCESS_KEY_ID
+AWS_SECRET_ACCESS_KEY
+JWT_SIGNING_KEY
+```
+
+The backend uses the EC2 role for AWS SDK access.
+
+## 15. Build and run the first API container manually
+
+From a reviewed checkout:
 
 ```powershell
 Set-Location .\backend
-.\mvnw.cmd clean package -DskipTests
+.\mvnw.cmd clean verify
+docker build -t ev-fleet-intelligence-api:local .
 ```
 
-Copy the resulting JAR to the EC2 release directory. Do not build from an
-unreviewed working tree on the production server.
-
-## 11. Configure the backend on EC2
-
-Create a root-owned environment file such as:
-
-```text
-/etc/ev-fleet/production.env
-```
-
-Example values:
-
-```properties
-SPRING_DATASOURCE_URL=jdbc:postgresql://<rds-endpoint>:5432/evfleetdb
-SPRING_DATASOURCE_USERNAME=evfleet_app
-SPRING_DATASOURCE_PASSWORD=<read-from-secrets-manager>
-SERVER_PORT=8080
-SPRING_JPA_HIBERNATE_DDL_AUTO=validate
-SPRING_JPA_SHOW_SQL=false
-```
-
-Prefer fetching the secret at startup through the AWS SDK or a secrets
-sidecar instead of writing the password to disk. If an environment file is
-used temporarily:
+For CI, the image is tagged with the commit SHA. To perform a controlled
+manual first deployment:
 
 ```bash
-sudo chown root:root /etc/ev-fleet/production.env
-sudo chmod 600 /etc/ev-fleet/production.env
+docker run -d \
+  --name ev-fleet-api \
+  --restart unless-stopped \
+  --env-file /etc/ev-fleet-intelligence/backend.env \
+  -p 127.0.0.1:8080:8080 \
+  <ACCOUNT_ID>.dkr.ecr.ap-south-1.amazonaws.com/ev-fleet-intelligence-api:<TAG>
 ```
 
-Create a systemd service:
-
-```ini
-[Unit]
-Description=EV Fleet Intelligence API
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-User=evfleet
-Group=evfleet
-WorkingDirectory=/opt/ev-fleet/current
-EnvironmentFile=/etc/ev-fleet/production.env
-ExecStart=/usr/bin/java -jar /opt/ev-fleet/current/backend.jar
-SuccessExitStatus=143
-Restart=always
-RestartSec=10
-NoNewPrivileges=true
-PrivateTmp=true
-
-[Install]
-WantedBy=multi-user.target
-```
-
-Start and inspect it:
+Inspect:
 
 ```bash
-sudo systemctl daemon-reload
-sudo systemctl enable ev-fleet-api
-sudo systemctl start ev-fleet-api
-sudo systemctl status ev-fleet-api
-sudo journalctl -u ev-fleet-api -n 100 --no-pager
+docker ps
+docker logs --tail 200 ev-fleet-api
+curl -i http://127.0.0.1:8080/actuator/health
 ```
 
-Add a simple authenticated-free readiness endpoint before production, such as
-`/actuator/health`, and expose only the health endpoint to the load balancer.
-Do not use a data endpoint as the health check.
+Do not continue until the container starts, Flyway completes, and health
+returns successfully.
 
-## 12. Create the Application Load Balancer
+## 16. Create the Application Load Balancer
 
-In the AWS Console:
+Console sequence:
 
-```text
-EC2 -> Load Balancers -> Create -> Application Load Balancer
-```
+1. EC2 -> Load Balancers -> Create Application Load Balancer.
+2. Scheme: Internet-facing.
+3. Select both public subnets.
+4. Attach `ev-fleet-alb-sg`.
+5. Create a target group for instances or IPs on HTTP port `8080`.
+6. Register the EC2 instance.
+7. Health check protocol: HTTP.
+8. Health check path: `/actuator/health`.
+9. Success code: `200`.
+10. Create port 80 listener that redirects to HTTPS.
+11. Create port 443 listener that forwards to the target group after ACM is
+    ready.
 
-Configure:
+Verify the target becomes healthy. If it is unhealthy, check:
 
-1. Internet-facing.
-2. Two public subnets in different Availability Zones.
-3. ALB security group.
-4. Target group using HTTP port `8080`.
-5. Target type: instance or IP.
-6. Health check path: `/actuator/health`.
-7. Listener 80: redirect to HTTPS.
-8. Listener 443: forward to the backend target group.
-9. Attach an ACM certificate.
+- The API container is bound to `127.0.0.1:8080` only when the ALB target is
+  on the same host; for an ALB target, bind the container/API to the host
+  interface inside the private network as required by the chosen target mode.
+- The API security group allows traffic from the ALB security group.
+- `/actuator/health` is reachable.
+- Flyway and the database are ready.
 
-Test the ALB DNS name before adding DNS:
+Choose one consistent target design. If using an instance target, publish
+container port `8080` on the instance private interface and allow only the ALB
+security group to reach it.
 
-```powershell
-curl.exe -i https://<alb-dns-name>/actuator/health
-```
+## 17. Configure ACM and Route 53
 
-## 13. Configure HTTPS and DNS
+### ACM
 
-In AWS Certificate Manager:
+1. ACM -> Request certificate.
+2. Request `api.example.com`.
+3. Use DNS validation.
+4. Create the validation CNAME in Route 53.
+5. Wait for status `Issued`.
+6. Attach the certificate to the ALB port 443 listener.
 
-1. Request a public certificate for `api.example.com`.
-2. Choose DNS validation.
-3. Add the provided validation CNAME record to Route 53.
-4. Wait for the certificate to become `Issued`.
-5. Attach it to the ALB HTTPS listener.
+Request a separate certificate for `app.example.com` if hosting Flutter web.
 
-In Route 53:
+### Route 53
 
-1. Create or import the hosted zone for `example.com`.
-2. Set the registrar name servers to the Route 53 name servers.
+1. Create or select the hosted zone for the domain.
+2. Ensure the registrar uses the Route 53 name servers.
 3. Create an alias A record:
 
 ```text
-api.example.com -> ALB
+api.example.com -> Application Load Balancer
 ```
 
-Use HTTPS only in all Flutter release builds:
-
-```text
-https://api.example.com
-```
-
-## 14. Deploy Flutter web, if required
-
-Create a public web bucket for the static frontend. Keep it separate from the
-private station-image bucket:
-
-```text
-ev-fleet-production-web-<account-id>
-```
-
-Build the web client:
-
-```powershell
-Set-Location .\frontend
-flutter pub get
-flutter build web --release `
-  --dart-define=API_BASE_URL=https://api.example.com `
-  --dart-define=AWS_REGION=ap-south-1 `
-  --dart-define=COGNITO_USER_POOL_ID=ap-south-1_xxxxxxxx `
-  --dart-define=COGNITO_APP_CLIENT_ID=xxxxxxxx `
-  --dart-define=COGNITO_REDIRECT_URI=https://app.example.com/auth/callback
-```
-
-Upload the build:
-
-```powershell
-aws s3 sync .\build\web s3://ev-fleet-production-web-<account-id> `
-  --delete --cache-control "public,max-age=31536000,immutable"
-```
-
-Use CloudFront in front of the bucket. Configure:
-
-1. Origin access control.
-2. Private S3 bucket; no public bucket policy.
-3. Default root object: `index.html`.
-4. Custom error responses mapping 403 and 404 to `/index.html` for Flutter
-   client-side routes.
-5. ACM certificate in `us-east-1` for the CloudFront distribution.
-6. Alternate domain name: `app.example.com`.
-7. HTTPS redirect.
-8. Compression enabled.
-
-Create a Route 53 alias:
+4. If hosting web, create:
 
 ```text
 app.example.com -> CloudFront distribution
 ```
 
-After each release, invalidate cached HTML:
-
-```powershell
-aws cloudfront create-invalidation `
-  --distribution-id <distribution-id> `
-  --paths "/index.html" "/flutter_bootstrap.js"
-```
-
-## 15. Build and distribute Android
-
-Before creating a release build:
-
-1. Complete Cognito PKCE redirect handling in Android.
-2. Configure Android signing with a release keystore.
-3. Store the keystore and passwords outside Git.
-4. Configure the Android application ID and version.
-5. Add the production HTTPS API URL.
-6. Test against staging before production.
-
-Build an APK for internal testing:
-
-```powershell
-Set-Location .\frontend
-flutter build apk --release `
-  --dart-define=API_BASE_URL=https://api.example.com `
-  --dart-define=AWS_REGION=ap-south-1 `
-  --dart-define=COGNITO_USER_POOL_ID=ap-south-1_xxxxxxxx `
-  --dart-define=COGNITO_APP_CLIENT_ID=xxxxxxxx `
-  --dart-define=COGNITO_REDIRECT_URI=<mobile-redirect-uri>
-```
-
-Build an Android App Bundle for Google Play:
-
-```powershell
-flutter build appbundle --release `
-  --dart-define=API_BASE_URL=https://api.example.com `
-  --dart-define=AWS_REGION=ap-south-1 `
-  --dart-define=COGNITO_USER_POOL_ID=ap-south-1_xxxxxxxx `
-  --dart-define=COGNITO_APP_CLIENT_ID=xxxxxxxx `
-  --dart-define=COGNITO_REDIRECT_URI=<mobile-redirect-uri>
-```
-
-Never embed AWS IAM credentials in the APK. The Cognito app client ID is
-public; client secrets and AWS access keys are not.
-
-## 16. Configure monitoring and operations
-
-Create CloudWatch alarms for:
-
-- ALB 5xx responses.
-- ALB unhealthy targets.
-- EC2 status checks and CPU.
-- RDS CPU, storage, free memory, connections, and free storage.
-- API latency.
-- Estimated AWS charges.
-
-Configure:
-
-1. EC2 application logs to CloudWatch Logs.
-2. ALB access logs to an S3 bucket.
-3. RDS PostgreSQL logs to CloudWatch.
-4. SNS email or incident notification topics.
-5. A log retention period.
-6. RDS automated backups and periodic restore tests.
-7. EC2 AMI or launch-template recovery plan.
-
-Document how to:
-
-- Roll back to the previous JAR.
-- Roll back a Flutter web release.
-- Restore an RDS snapshot.
-- Rotate the database password.
-- Rotate Cognito settings.
-- Revoke compromised sessions.
-- Replace an unhealthy EC2 instance.
-
-## 17. Production deployment checklist
-
-### Security
-
-- [ ] MFA enabled for all human AWS identities.
-- [ ] No secrets committed to Git.
-- [ ] RDS is private and encrypted.
-- [ ] RDS security group allows only the API security group.
-- [ ] EC2 has an instance role with least privilege.
-- [ ] S3 buckets block public access unless a public static-site policy is
-      intentionally replaced by CloudFront origin access control.
-- [ ] API is HTTPS-only through the ALB.
-- [ ] Cognito JWT validation is enabled in the backend.
-- [ ] `X-User-Sub` is not trusted in production.
-- [ ] CORS allows only the deployed web origins.
-- [ ] Database migrations are versioned.
-
-### Application
-
-- [ ] Backend tests pass.
-- [ ] Flutter analyzer and tests pass.
-- [ ] Remote Flutter repositories are wired into the active screens.
-- [ ] Profile creation, vehicle creation, station creation, station browsing,
-      booking, cancellation, and sign-out were tested against staging.
-- [ ] Station images use S3 presigned URLs.
-- [ ] Health endpoint returns healthy only when dependencies are ready.
-- [ ] Error responses do not expose stack traces or secrets.
-
-### Release
-
-- [ ] Production build uses `https://api.example.com`.
-- [ ] Android signing is configured outside Git.
-- [ ] Cognito callback and sign-out URLs exactly match the deployed clients.
-- [ ] CloudFront SPA fallback works on a direct route refresh.
-- [ ] DNS and TLS certificates are valid.
-- [ ] Backups and alarms were tested.
-
-## 18. End-to-end verification
-
-From a machine outside the VPC:
+Test:
 
 ```powershell
 curl.exe -i https://api.example.com/actuator/health
-curl.exe -i https://api.example.com/api/stations
 ```
 
-The stations endpoint should return `401` once Cognito enforcement is enabled
-unless it is intentionally public. Test authenticated calls with a real
-Cognito access token; never test production with a fabricated subject header.
+## 18. Optional Flutter web hosting
 
-Verify the following flows:
+The charging-provider app is primarily mobile. If a web build is required:
 
-1. Register a new Cognito user.
-2. Sign in through the web or Android client.
-3. Confirm the backend receives the validated Cognito subject.
-4. Complete vehicle-owner onboarding.
-5. Create and retrieve a vehicle.
-6. Browse stations.
-7. Create a booking and verify server-side conflict handling.
-8. Cancel a booking.
-9. Sign out and confirm protected routes are inaccessible.
-10. Sign in as a different user and confirm ownership isolation.
-11. Upload and retrieve a station image through presigned URLs.
-12. Inspect CloudWatch logs and alarms.
+1. Create a separate private S3-origin bucket for web assets.
+2. Create a CloudFront distribution with the S3 bucket as an origin.
+3. Use Origin Access Control; do not make the bucket public.
+4. Configure the ACM certificate in `us-east-1` for CloudFront.
+5. Configure the default root object and SPA error responses.
+6. Point `app.example.com` to CloudFront.
+7. Set backend `FRONTEND_ORIGIN=https://app.example.com`.
 
-## 19. Deployment commands summary
-
-Backend build:
+Build:
 
 ```powershell
-Set-Location .\backend
-.\mvnw.cmd clean test package
+Set-Location .\mobile\charging_provider
+flutter build web --release `
+  --dart-define-from-file=env\production.json
 ```
 
-Flutter checks:
+Upload only the `build/web/` contents to the web bucket. Do not upload
+`production.json`.
+
+## 19. Configure the charging-provider client
+
+Create this local, untracked file:
+
+```text
+mobile/charging_provider/env/production.json
+```
+
+Contents:
+
+```json
+{
+  "API_BASE_URL": "https://api.example.com",
+  "AWS_REGION": "ap-south-1",
+  "COGNITO_USER_POOL_ID": "ap-south-1_xxxxxxxx",
+  "COGNITO_APP_CLIENT_ID": "public-client-id",
+  "DEMO_MODE": "false"
+}
+```
+
+Build the Android release:
 
 ```powershell
-Set-Location .\frontend
+Set-Location .\mobile\charging_provider
 flutter pub get
 flutter analyze
 flutter test
+flutter build apk --release --dart-define-from-file=env\production.json
 ```
 
-Flutter web build:
+These are public client identifiers. Never put database passwords, AWS access
+keys, Cognito client secrets, or JWT signing keys in this file. The API URL
+must be HTTPS for release builds.
+
+## 20. Configure GitHub Actions CI/CD
+
+The current workflows are:
+
+```text
+.github/workflows/ci.yml
+.github/workflows/deploy-production.yml
+```
+
+### 20.1 GitHub repository setup
+
+1. Push the workflow files to the default branch.
+2. In GitHub, create an environment named `production`.
+3. Require reviewers for the `production` environment.
+4. Restrict deployment branches to `main`.
+5. Enable branch protection for `main`:
+   - Require pull requests.
+   - Require CI checks.
+   - Require conversation resolution.
+   - Do not allow force pushes.
+6. Enable Dependabot/security alerts and secret scanning.
+
+### 20.2 Add production environment variables
+
+Under Repository -> Settings -> Environments -> `production` -> Variables, add:
+
+```text
+AWS_REGION=ap-south-1
+AWS_ACCOUNT_ID=<12-digit-account-id>
+AWS_DEPLOY_ROLE_ARN=arn:aws:iam::<account-id>:role/<github-oidc-role>
+ECR_REPOSITORY=ev-fleet-intelligence-api
+EC2_INSTANCE_ID=<production-ec2-instance-id>
+```
+
+These are identifiers, not passwords. Do not add long-lived AWS keys.
+
+### 20.3 Verify the OIDC trust policy
+
+The GitHub role must trust:
+
+```text
+token.actions.githubusercontent.com
+```
+
+Limit the `sub` condition to the repository and production environment. The
+role must be unable to deploy arbitrary repositories or branches.
+
+### 20.4 CI sequence
+
+Every pull request and every push to `main`/`develop` should:
+
+1. Check out the repository.
+2. Start PostgreSQL.
+3. Run backend Maven verification.
+4. Run charging-provider `flutter pub get`, `flutter analyze`, and tests.
+
+A push to `main` additionally:
+
+1. Builds the backend JAR.
+2. Builds the Docker image.
+3. Logs in to ECR using OIDC.
+4. Pushes an immutable commit-SHA tag.
+
+The image is not production until the pull request checks pass.
+
+### 20.5 Production deployment sequence
+
+1. Merge the reviewed change to `main`.
+2. Wait for `CI` to pass.
+3. Confirm the image exists in ECR under the commit SHA.
+4. Open Actions -> `Deploy production API`.
+5. Enter the exact commit SHA as `image_tag`.
+6. Start the workflow.
+7. Approve the `production` environment when GitHub requests approval.
+8. The workflow assumes the AWS OIDC role.
+9. It sends an SSM command to EC2.
+10. EC2 pulls the image, replaces the container, and starts it using the
+    protected env file.
+11. Verify the SSM command succeeded.
+12. Verify the ALB target and health endpoint.
+13. Run the smoke tests in Section 22.
+
+Do not type secrets into workflow inputs or log commands that contain secrets.
+
+## 21. Exact configuration locations
+
+### AWS/EC2 runtime values
+
+Edit or populate this file on the deployment host only:
+
+```text
+/etc/ev-fleet-intelligence/backend.env
+```
+
+Required values:
+
+```text
+SPRING_PROFILES_ACTIVE=prod
+DB_URL=jdbc:postgresql://<RDS_ENDPOINT>:5432/evfleetdb
+DB_USERNAME=<RDS_APP_USER>
+DB_PASSWORD=<RDS_APP_PASSWORD>
+COGNITO_ENABLED=true
+COGNITO_ISSUER_URI=https://cognito-idp.<region>.amazonaws.com/<pool-id>
+COGNITO_CLIENT_ID=<public-app-client-id>
+FRONTEND_ORIGIN=https://<web-origin>
+AWS_REGION=<region>
+S3_ENABLED=true
+S3_BUCKET=<private-image-bucket>
+S3_PRESIGN_EXPIRY_SECONDS=900
+```
+
+The property mappings are in:
+
+```text
+backend/src/main/resources/application.properties
+backend/src/main/resources/application-prod.properties
+```
+
+Do not put production secrets in those repository files.
+
+### Local Flutter release values
+
+Create locally and do not commit:
+
+```text
+mobile/charging_provider/env/production.json
+```
+
+Use the public values in Section 19.
+
+### GitHub production variables
+
+Set under the GitHub `production` environment:
+
+```text
+AWS_REGION
+AWS_ACCOUNT_ID
+AWS_DEPLOY_ROLE_ARN
+ECR_REPOSITORY
+EC2_INSTANCE_ID
+```
+
+### AWS Secrets Manager
+
+Store the database password and, if used, the master/admin database credential
+in Secrets Manager. The API must receive only the application user's
+credential. Never store Flutter configuration or Cognito public IDs as
+secrets.
+
+## 22. First production smoke test
+
+Run these checks in order after the first deployment.
+
+### Infrastructure
+
+- ALB target is healthy.
+- EC2 instance is SSM managed.
+- RDS is available and has no public access.
+- RDS security group allows only the API security group.
+- S3 block-public-access is enabled.
+- CloudTrail and CloudWatch logging are enabled as required.
+
+### API
 
 ```powershell
-flutter build web --release --dart-define=API_BASE_URL=https://api.example.com
+curl.exe -i https://api.example.com/actuator/health
 ```
 
-S3 upload:
+Expected: HTTP `200` and a healthy response.
 
-```powershell
-aws s3 sync .\build\web s3://<web-bucket> --delete
+### Cognito
+
+1. Register a provider through the Flutter app.
+2. Verify the email in Cognito.
+3. Sign in.
+4. Confirm the app sends an access token, not an ID token, to the API.
+5. Confirm an unauthenticated request to a protected endpoint returns `401`.
+6. Confirm a provider cannot access another provider's station-management
+   operations.
+
+### Provider workflow
+
+1. Complete provider profile onboarding.
+2. Create a station.
+3. Edit the station.
+4. Add and remove availability windows.
+5. Sign in as a vehicle owner only in a test environment and create a booking.
+6. Accept or reject the booking as the provider.
+7. Start and complete a charging session.
+8. Confirm the server-calculated billing result.
+9. If image upload is enabled, request a presigned URL, upload a test image,
+   persist the object key, and verify the object remains private.
+
+### Database
+
+```sql
+SELECT installed_rank, version, description, success
+FROM flyway_schema_history
+ORDER BY installed_rank;
 ```
 
-## 20. Remove the environment
+All applied migrations must have `success = true`.
 
-Deletion is destructive. Export data and confirm the target account and
-region before proceeding.
+## 23. Logs, alarms, and operations
 
-1. Disable the CloudFront distribution and wait for deletion if removing it.
-2. Remove Route 53 records and hosted zone only if the domain is no longer
-   used.
-3. Delete the ALB and target group.
-4. Terminate EC2 instances and delete unused EBS volumes.
-5. Delete the RDS instance only after taking a final snapshot and disabling
-   deletion protection.
-6. Delete NAT gateways to stop hourly charges.
-7. Delete unused Elastic IP addresses.
-8. Empty and delete S3 buckets only after confirming backups are not needed.
-9. Delete Cognito resources if the user accounts are no longer required.
-10. Remove unused security groups, IAM roles, CloudWatch logs, alarms, and
-    SNS topics.
-11. Verify billing and Cost Explorer after cleanup.
+Monitor:
 
-## Related documentation
+- ALB `HTTPCode_Target_5XX_Count`
+- ALB target health
+- EC2 CPU, memory, disk, and container restarts
+- RDS CPU, storage, connections, free storage, and failed connections
+- RDS backup status
+- S3 4xx/5xx errors and object growth
+- Cognito sign-in failures and throttling
 
-- [Local app testing](./LOCAL_APP_TESTING.md)
-- [Flutter Android setup](./FLUTTER_ANDROID_SETUP.md)
-- [Root README](./README.md)
-- [Cognito implementation notes](./Implementation.md)
+Retain:
+
+- ALB access logs if required.
+- Application logs in CloudWatch.
+- RDS PostgreSQL logs.
+- CloudTrail management events.
+
+Never log:
+
+- Access tokens.
+- Passwords.
+- Database URLs containing credentials.
+- Presigned URLs in long-term logs.
+- AWS secret keys.
+
+## 24. Rollback procedure
+
+### Application rollback
+
+1. Identify the last healthy commit SHA in ECR.
+2. Open `Deploy production API`.
+3. Enter that SHA as `image_tag`.
+4. Approve the production environment.
+5. Wait for SSM completion.
+6. Verify ALB health and smoke tests.
+
+Do not rebuild an old source branch with a different dependency lockfile when
+an immutable image already exists.
+
+### Database rollback
+
+Flyway migrations are forward-only by default. Do not manually delete rows
+from `flyway_schema_history` or downgrade production schema in place.
+
+For a failed migration:
+
+1. Stop promotion.
+2. Preserve logs and migration status.
+3. Restore the pre-migration RDS snapshot to a recovery instance or follow the
+   approved forward-fix procedure.
+4. Rehearse the repair on a restored copy.
+5. Ship a new migration and application version.
+
+## 25. Release checklist
+
+Before release approval:
+
+- [ ] Pull request CI passed.
+- [ ] Backend tests passed against PostgreSQL.
+- [ ] Charging-provider analyzer and tests passed.
+- [ ] Docker image has an immutable commit-SHA tag.
+- [ ] Image scan has no unaccepted critical findings.
+- [ ] Production environment approval is configured.
+- [ ] Cognito issuer and client ID are correct.
+- [ ] RDS backup and restore procedure was tested.
+- [ ] Flyway migrations were rehearsed on staging.
+- [ ] S3 bucket is private and encrypted.
+- [ ] EC2 has no unnecessary public exposure.
+- [ ] ALB HTTPS listener and certificate are active.
+- [ ] `FRONTEND_ORIGIN` is exact and not a wildcard.
+- [ ] Flutter release uses HTTPS and production public identifiers.
+- [ ] No secrets are present in Git, Flutter assets, logs, or workflow output.
+- [ ] Rollback image SHA is recorded.
+- [ ] Smoke tests passed after deployment.
+
+## 26. Values that must never be committed
+
+Never commit any of the following:
+
+```text
+DB_PASSWORD
+AWS_ACCESS_KEY_ID
+AWS_SECRET_ACCESS_KEY
+COGNITO_CLIENT_SECRET
+JWT signing/private keys
+RDS master password
+Secrets Manager JSON
+Production access tokens
+Private SSH keys
+```
+
+The repository should contain templates and documentation only. Public
+identifiers such as the Cognito user-pool ID, public app-client ID, AWS region,
+and HTTPS API URL may be passed to Flutter at build time, but keeping them in
+an untracked release configuration is recommended.

@@ -1,3 +1,4 @@
+
 package com.evfleet.backend.security;
 
 import org.springframework.http.HttpStatus;
@@ -6,12 +7,22 @@ import org.springframework.security.oauth2.server.resource.authentication.JwtAut
 import org.springframework.web.server.ResponseStatusException;
 
 public final class CurrentUser {
-    private CurrentUser() {}
+
+    private CurrentUser() {
+    }
 
     public static String subject(Authentication authentication) {
-        if (authentication instanceof JwtAuthenticationToken jwt && jwt.getToken().getSubject() != null) {
+
+        if (authentication instanceof JwtAuthenticationToken jwt
+                && jwt.getToken().getSubject() != null
+                && !jwt.getToken().getSubject().isBlank()) {
+
             return jwt.getToken().getSubject();
         }
-        throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "A Cognito access token is required");
+
+        throw new ResponseStatusException(
+                HttpStatus.UNAUTHORIZED,
+                "A Cognito access token is required"
+        );
     }
 }

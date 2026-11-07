@@ -1,0 +1,39 @@
+﻿# Environment variables and secrets
+.env
+.env.*
+!.env.example
+!.env.template
+*.pem
+*.key
+*.p12
+*.pfx
+
+# Local configuration
+application-local.properties
+application-secret.properties
+
+# Generated build files
+**/target/
+**/build/
+**/.dart_tool/
+**/.flutter-plugins
+**/.flutter-plugins-dependencies
+**/android/.gradle/
+**/ios/Pods/
+
+# IDE and operating system
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Logs and backups
+*.log
+*.bak
+*.tmp
+
+# Project archives
+/ev-fleet-source.zip
+
+# Generated reports
+/frontend/android/build/reports/
