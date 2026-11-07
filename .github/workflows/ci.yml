@@ -69,6 +69,7 @@ jobs:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     needs: [backend, charging-provider]
     runs-on: ubuntu-latest
+    environment: production
     permissions:
       contents: read
       id-token: write
