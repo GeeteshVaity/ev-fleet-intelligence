@@ -7,9 +7,8 @@ import '../services/cognito_auth_service.dart';
 class AuthRepository {
   AuthRepository({
     required CognitoAuthService cognitoAuthService,
-    required SecureStorageService secureStorage,
-  }) : _cognito = cognitoAuthService,
-       _secureStorage = secureStorage;
+    required this._secureStorage,
+  }) : _cognito = cognitoAuthService;
 
   final CognitoAuthService _cognito;
   final SecureStorageService _secureStorage;

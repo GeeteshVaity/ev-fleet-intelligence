@@ -285,7 +285,7 @@ class _BookingsScreenState extends State<BookingsScreen> {
                 padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
                 sliver: SliverList.separated(
                   itemCount: filteredBookings.length,
-                  separatorBuilder: (_, __) =>
+                  separatorBuilder: (_, _) =>
                       const SizedBox(height: 12),
                   itemBuilder: (context, index) {
                     final booking = filteredBookings[index];

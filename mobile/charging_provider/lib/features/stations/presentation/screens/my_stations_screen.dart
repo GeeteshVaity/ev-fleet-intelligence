@@ -298,7 +298,7 @@ class _MyStationsScreenState extends State<MyStationsScreen> {
                       padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
                       sliver: SliverList.separated(
                         itemCount: filteredStations.length,
-                        separatorBuilder: (_, __) =>
+                        separatorBuilder: (_, _) =>
                             const SizedBox(height: 12),
                         itemBuilder: (context, index) {
                           final station = filteredStations[index];
