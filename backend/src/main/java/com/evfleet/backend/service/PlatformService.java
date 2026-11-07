@@ -1,12 +1,16 @@
+
 package com.evfleet.backend.service;
 
+import com.evfleet.backend.controller.UserController;
 import com.evfleet.backend.model.*;
 import com.evfleet.backend.repository.*;
+
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
-import com.evfleet.backend.controller.UserController;
+
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.Duration;
@@ -15,6 +19,7 @@ import java.util.*;
 
 @Service
 public class PlatformService {
+
     private final AppUserRepository users;
     private final VehicleRepository vehicles;
     private final ChargingStationRepository stations;
@@ -23,188 +28,1002 @@ public class PlatformService {
     private final ChargerAvailabilityRepository availability;
     private final StationImageRepository images;
 
-    public PlatformService(AppUserRepository users, VehicleRepository vehicles, ChargingStationRepository stations,
-                           BookingRepository bookings, ChargingSessionRepository sessions,
-                           ChargerAvailabilityRepository availability, StationImageRepository images) {
-        this.users=users; this.vehicles=vehicles; this.stations=stations; this.bookings=bookings;
-        this.sessions=sessions; this.availability=availability; this.images=images;
-    }
-    /** Largest radius accepted by the nearby search; mirrors the mobile cap. */
     private static final double MAX_SEARCH_RADIUS_KM = 50;
 
-    public AppUser current(String sub) {
-        if (sub == null || sub.isBlank()) throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Authenticated Cognito subject is required");
-        return users.findByCognitoSub(sub).orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Profile not found"));
+    public PlatformService(
+            AppUserRepository users,
+            VehicleRepository vehicles,
+            ChargingStationRepository stations,
+            BookingRepository bookings,
+            ChargingSessionRepository sessions,
+            ChargerAvailabilityRepository availability,
+            StationImageRepository images
+    ) {
+        this.users = users;
+        this.vehicles = vehicles;
+        this.stations = stations;
+        this.bookings = bookings;
+        this.sessions = sessions;
+        this.availability = availability;
+        this.images = images;
     }
-    @Transactional
-    public AppUser saveProfile(String sub, UserController.ProfileRequest input) {
+
+    // --------------------------------------------------
+    // USER PROFILE
+    // --------------------------------------------------
+
+    public AppUser current(String sub) {
         if (sub == null || sub.isBlank()) {
-            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Authenticated Cognito subject is required");
+            throw new ResponseStatusException(
+                    HttpStatus.UNAUTHORIZED,
+                    "Authenticated Cognito subject is required"
+            );
         }
-        AppUser user = users.findByCognitoSub(sub).orElseGet(AppUser::new);
+
+        return users.findByCognitoSub(sub)
+                .orElseThrow(() -> notFound("Profile"));
+    }
+
+    @Transactional
+    public AppUser saveProfile(
+            String sub,
+            UserController.ProfileRequest input
+    ) {
+        if (sub == null || sub.isBlank()) {
+            throw new ResponseStatusException(
+                    HttpStatus.UNAUTHORIZED,
+                    "Authenticated Cognito subject is required"
+            );
+        }
+
+        AppUser user = users.findByCognitoSub(sub)
+                .orElseGet(AppUser::new);
+
         user.setCognitoSub(sub);
-        user.setFullName(input.fullName());
-        user.setEmail(input.email());
+        user.setFullName(input.fullName().trim());
+        user.setEmail(input.email().trim().toLowerCase());
         user.setPhone(input.phone());
+
         if (input.role() != null) {
             validateRole(input.role());
-            if (user.getRole() != null && !user.getRole().equals(input.role())) {
-                throw new ResponseStatusException(HttpStatus.CONFLICT, "Role cannot be changed after registration");
+
+            if (user.getRole() != null
+                    && !user.getRole().equals(input.role())) {
+                throw new ResponseStatusException(
+                        HttpStatus.CONFLICT,
+                        "Role cannot be changed after registration"
+                );
             }
+
             user.setRole(input.role());
         }
+
+        if (input.businessName() != null
+                || input.providerType() != null
+                || input.address() != null) {
+            if (input.businessName() == null
+                    || input.businessName().isBlank()
+                    || input.providerType() == null
+                    || input.providerType().isBlank()
+                    || input.address() == null
+                    || input.address().isBlank()) {
+                throw new ResponseStatusException(
+                        HttpStatus.BAD_REQUEST,
+                        "Business name, provider type and address are required together"
+                );
+            }
+
+            validateProviderType(input.providerType());
+
+            user.setBusinessName(input.businessName().trim());
+            user.setProviderType(input.providerType());
+            user.setAddress(input.address().trim());
+        }
+
         user.touch();
         return users.save(user);
     }
-    private void validateRole(String role) {
-        if (!role.equals("VEHICLE_OWNER") && !role.equals("CHARGER_PROVIDER")) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
-                    "role must be VEHICLE_OWNER or CHARGER_PROVIDER");
+
+    private void validateProviderType(String providerType) {
+        if (!List.of(
+                "COMMERCIAL_PROPERTY",
+                "RESIDENTIAL_HOST",
+                "FLEET_OPERATOR",
+                "HOUSEHOLD",
+                "PUBLIC"
+        ).contains(providerType)) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "Invalid provider type"
+            );
         }
     }
-    @Transactional
-    public AppUser updateOnboarding(String sub, String role, Boolean completed, Integer step) {
-        AppUser user = current(sub);
-        if (role != null) validateRole(role);
-        if (user.getRole() != null && role != null && !user.getRole().equals(role)) {
-            throw new ResponseStatusException(HttpStatus.CONFLICT, "Role cannot be changed after registration");
+
+    private void validateRole(String role) {
+        if (!"VEHICLE_OWNER".equals(role)
+                && !"CHARGER_PROVIDER".equals(role)) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "role must be VEHICLE_OWNER or CHARGER_PROVIDER"
+            );
         }
-        if (role != null) user.setRole(role);
-        // "Onboarding complete" is only meaningful once the role is known and
-        // the role-specific record exists, so it cannot be self-asserted by a
-        // client that never created a vehicle or a station.
+    }
+
+    @Transactional
+    public AppUser updateOnboarding(
+            String sub,
+            String role,
+            Boolean completed,
+            Integer step
+    ) {
+        AppUser user = current(sub);
+
+        if (role != null) {
+            validateRole(role);
+        }
+
+        if (user.getRole() != null
+                && role != null
+                && !user.getRole().equals(role)) {
+            throw new ResponseStatusException(
+                    HttpStatus.CONFLICT,
+                    "Role cannot be changed after registration"
+            );
+        }
+
+        if (role != null) {
+            user.setRole(role);
+        }
+
         if (Boolean.TRUE.equals(completed)) {
             String effectiveRole = user.getRole();
+
             if (effectiveRole == null) {
-                throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
-                        "role is required to complete onboarding");
+                throw new ResponseStatusException(
+                        HttpStatus.BAD_REQUEST,
+                        "role is required to complete onboarding"
+                );
             }
+
             boolean hasRecords = "VEHICLE_OWNER".equals(effectiveRole)
                     ? !vehicles.findByOwnerUserId(user.getId()).isEmpty()
                     : !stations.findByOwnerUserId(user.getId()).isEmpty();
+
             if (!hasRecords) {
-                throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
-                        "Create at least one " + ("VEHICLE_OWNER".equals(effectiveRole) ? "vehicle" : "station")
-                                + " before completing onboarding");
+                throw new ResponseStatusException(
+                        HttpStatus.BAD_REQUEST,
+                        "Create at least one "
+                                + ("VEHICLE_OWNER".equals(effectiveRole)
+                                ? "vehicle" : "station")
+                                + " before completing onboarding"
+                );
+            }
+
+            if ("CHARGER_PROVIDER".equals(effectiveRole)
+                    && (user.getBusinessName() == null
+                    || user.getBusinessName().isBlank()
+                    || user.getProviderType() == null
+                    || user.getProviderType().isBlank()
+                    || user.getAddress() == null
+                    || user.getAddress().isBlank())) {
+                throw new ResponseStatusException(
+                                HttpStatus.BAD_REQUEST,
+                                "Complete the provider profile before completing onboarding"
+                );
             }
         }
-        if (completed != null) user.setOnboardingCompleted(completed);
-        if (step != null && step < 1) throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "onboardingStep must be positive");
-        if (step != null) user.setOnboardingStep(step);
+
+        if (completed != null) {
+            user.setOnboardingCompleted(completed);
+        }
+
+        if (step != null && step < 1) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "onboardingStep must be positive"
+            );
+        }
+
+        if (step != null) {
+            user.setOnboardingStep(step);
+        }
+
         user.touch();
         return users.save(user);
     }
-    public List<Vehicle> myVehicles(String sub){ return vehicles.findByOwnerUserId(current(sub).getId()); }
-    public Vehicle vehicle(String sub, Long id){ return ownedVehicle(sub,id); }
-    public Vehicle saveVehicle(String sub, Vehicle input){ requireRole(sub, "VEHICLE_OWNER"); input.setOwnerUserId(current(sub).getId()); input.setVehicleType(required(input.getVehicleType(),"vehicleType")); input.setModel(required(input.getModel(),"model")); return vehicles.save(input); }
-    public Vehicle updateVehicle(String sub, Long id, Vehicle input){ Vehicle v=ownedVehicle(sub,id); v.setVehicleType(required(input.getVehicleType(),"vehicleType")); v.setBrand(input.getBrand()); v.setModel(required(input.getModel(),"model")); v.setRegistrationNumber(input.getRegistrationNumber()); v.setBatteryCapacityKwh(input.getBatteryCapacityKwh()); v.setConnectorType(input.getConnectorType()); return vehicles.save(v); }
-    public void deleteVehicle(String sub, Long id){ vehicles.delete(ownedVehicle(sub,id)); }
-    private Vehicle ownedVehicle(String sub, Long id){ Vehicle v=vehicles.findById(id).orElseThrow(()->notFound("Vehicle")); if(!v.getOwnerUserId().equals(current(sub).getId())) throw forbidden(); return v; }
 
-    public List<ChargingStation> browse(){ return stations.findByActiveTrue(); }
-    public List<ChargingStation> mine(String sub){ return stations.findByOwnerUserId(current(sub).getId()); }
-    public ChargingStation station(Long id){ return stations.findById(id).filter(ChargingStation::isActive).orElseThrow(()->notFound("Station")); }
-    public ChargingStation saveStation(String sub, ChargingStation input){ requireRole(sub, "CHARGER_PROVIDER"); input.setOwnerUserId(current(sub).getId()); validateCoordinates(input); return stations.save(input); }
-    public ChargingStation updateStation(String sub, Long id, ChargingStation input){ ChargingStation s=ownedStation(sub,id); input.setOwnerUserId(s.getOwnerUserId()); input.setActive(s.isActive()); validateCoordinates(input); return copyStation(s,input); }
-    public ChargingStation setStationActive(String sub, Long id, boolean active){ ChargingStation s=ownedStation(sub,id); s.setActive(active); return stations.save(s); }
-    public void deactivateStation(String sub, Long id){ ChargingStation s=ownedStation(sub,id); s.setActive(false); stations.save(s); }
-    private ChargingStation ownedStation(String sub,Long id){ ChargingStation s=stations.findById(id).orElseThrow(()->notFound("Station")); if(!Objects.equals(s.getOwnerUserId(),current(sub).getId())) throw forbidden(); return s; }
+    // --------------------------------------------------
+    // VEHICLES
+    // --------------------------------------------------
+
+    public List<Vehicle> myVehicles(String sub) {
+        return vehicles.findByOwnerUserId(current(sub).getId());
+    }
+
+    public Vehicle vehicle(String sub, Long id) {
+        return ownedVehicle(sub, id);
+    }
+
+    public Vehicle saveVehicle(String sub, Vehicle input) {
+        requireRole(sub, "VEHICLE_OWNER");
+
+        input.setOwnerUserId(current(sub).getId());
+        input.setVehicleType(required(input.getVehicleType(), "vehicleType"));
+        input.setModel(required(input.getModel(), "model"));
+
+        return vehicles.save(input);
+    }
+
+    public Vehicle updateVehicle(
+            String sub,
+            Long id,
+            Vehicle input
+    ) {
+        requireRole(sub, "VEHICLE_OWNER");
+        Vehicle vehicle = ownedVehicle(sub, id);
+
+        vehicle.setVehicleType(required(input.getVehicleType(), "vehicleType"));
+        vehicle.setBrand(input.getBrand());
+        vehicle.setModel(required(input.getModel(), "model"));
+        vehicle.setRegistrationNumber(input.getRegistrationNumber());
+        vehicle.setBatteryCapacityKwh(input.getBatteryCapacityKwh());
+        vehicle.setConnectorType(input.getConnectorType());
+
+        return vehicles.save(vehicle);
+    }
+
+    public void deleteVehicle(String sub, Long id) {
+        requireRole(sub, "VEHICLE_OWNER");
+        vehicles.delete(ownedVehicle(sub, id));
+    }
+
+    private Vehicle ownedVehicle(String sub, Long id) {
+        Vehicle vehicle = vehicles.findById(id)
+                .orElseThrow(() -> notFound("Vehicle"));
+
+        if (!Objects.equals(
+                vehicle.getOwnerUserId(),
+                current(sub).getId()
+        )) {
+            throw forbidden();
+        }
+
+        return vehicle;
+    }
+
+    // --------------------------------------------------
+    // CHARGING STATIONS
+    // --------------------------------------------------
+
+    public List<ChargingStation> browse() {
+        return stations.findByActiveTrue();
+    }
+
+    public List<ChargingStation> mine(String sub) {
+        return stations.findByOwnerUserId(current(sub).getId());
+    }
+
+    public ChargingStation station(Long id) {
+        return stations.findById(id)
+                .filter(ChargingStation::isActive)
+                .orElseThrow(() -> notFound("Station"));
+    }
+
+    public ChargingStation saveStation(
+            String sub,
+            ChargingStation input
+    ) {
+        requireRole(sub, "CHARGER_PROVIDER");
+
+        input.setOwnerUserId(current(sub).getId());
+        validateStation(input);
+
+        return stations.save(input);
+    }
+
+    public ChargingStation updateStation(
+            String sub,
+            Long id,
+            ChargingStation input
+    ) {
+        ChargingStation existing = ownedStation(sub, id);
+
+        input.setOwnerUserId(existing.getOwnerUserId());
+        input.setActive(existing.isActive());
+
+        validateStation(input);
+
+        return copyStation(existing, input);
+    }
+
+    public ChargingStation setStationActive(
+            String sub,
+            Long id,
+            boolean active
+    ) {
+        ChargingStation station = ownedStation(sub, id);
+        station.setActive(active);
+
+        return stations.save(station);
+    }
+
+    public void deactivateStation(String sub, Long id) {
+        ChargingStation station = ownedStation(sub, id);
+        station.setActive(false);
+
+        stations.save(station);
+    }
+
+    private ChargingStation ownedStation(String sub, Long id) {
+        ChargingStation station = stations.findById(id)
+                .orElseThrow(() -> notFound("Station"));
+
+        if (!Objects.equals(
+                station.getOwnerUserId(),
+                current(sub).getId()
+        )) {
+            throw forbidden();
+        }
+
+        return station;
+    }
+
     private void requireRole(String sub, String required) {
         AppUser user = current(sub);
-        // A profile without a role must not be able to create both vehicles and
-        // stations. Legacy rows are repaired by assigning the role once through
-        // PUT /api/users/me/onboarding or PUT /api/users/me.
+
         if (user.getRole() == null) {
-            throw new ResponseStatusException(HttpStatus.FORBIDDEN,
-                    "Assign a profile role (VEHICLE_OWNER or CHARGER_PROVIDER) before creating records");
+            throw new ResponseStatusException(
+                    HttpStatus.FORBIDDEN,
+                    "Assign a profile role (VEHICLE_OWNER or CHARGER_PROVIDER) before creating records"
+            );
         }
-        if (!required.equals(user.getRole())) throw forbidden();
+
+        if (!required.equals(user.getRole())) {
+            throw forbidden();
+        }
     }
-    private ChargingStation copyStation(ChargingStation s,ChargingStation i){s.setStationName(i.getStationName());s.setProviderType(i.getProviderType());s.setAccessType(i.getAccessType());s.setAddress(i.getAddress());s.setLatitude(i.getLatitude());s.setLongitude(i.getLongitude());s.setConnectorType(i.getConnectorType());s.setPowerKw(i.getPowerKw());s.setPricePerKwh(i.getPricePerKwh());return stations.save(s);}
-    public List<ChargingStation> nearby(double lat,double lon,double radius){
-        if(lat<-90||lat>90||lon<-180||lon>180||radius<=0||radius>MAX_SEARCH_RADIUS_KM)
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,"Invalid coordinates or radius");
+
+    private void validateStation(ChargingStation station) {
+        validateCoordinates(station);
+
+        if (station.getPowerKw() == null
+                || station.getPowerKw().signum() <= 0) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "powerKw must be positive"
+            );
+        }
+
+        if (station.getPricePerKwh() != null
+                && station.getPricePerKwh().signum() < 0) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "pricePerKwh must be zero or greater"
+            );
+        }
+    }
+
+    private ChargingStation copyStation(
+            ChargingStation station,
+            ChargingStation input
+    ) {
+        station.setStationName(input.getStationName());
+        station.setProviderType(input.getProviderType());
+        station.setAccessType(input.getAccessType());
+        station.setAddress(input.getAddress());
+        station.setLatitude(input.getLatitude());
+        station.setLongitude(input.getLongitude());
+        station.setConnectorType(input.getConnectorType());
+        station.setPowerKw(input.getPowerKw());
+        station.setPricePerKwh(input.getPricePerKwh());
+
+        return stations.save(station);
+    }
+
+    private void validateCoordinates(ChargingStation station) {
+        if (station.getLatitude() == null
+                || station.getLongitude() == null
+                || station.getLatitude().doubleValue() < -90
+                || station.getLatitude().doubleValue() > 90
+                || station.getLongitude().doubleValue() < -180
+                || station.getLongitude().doubleValue() > 180) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "Invalid coordinates"
+            );
+        }
+    }
+
+    public List<ChargingStation> nearby(
+            double lat,
+            double lon,
+            double radius
+    ) {
+        if (lat < -90 || lat > 90
+                || lon < -180 || lon > 180
+                || radius <= 0 || radius > MAX_SEARCH_RADIUS_KM) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "Invalid coordinates or radius"
+            );
+        }
+
         return browse().stream()
-                .filter(s->distance(lat,lon,s.getLatitude().doubleValue(),s.getLongitude().doubleValue())<=radius)
-                .sorted(Comparator.comparingDouble(s->distance(lat,lon,s.getLatitude().doubleValue(),s.getLongitude().doubleValue())))
+                .filter(station -> distance(
+                        lat, lon,
+                        station.getLatitude().doubleValue(),
+                        station.getLongitude().doubleValue()
+                ) <= radius)
+                .sorted(Comparator.comparingDouble(station -> distance(
+                        lat, lon,
+                        station.getLatitude().doubleValue(),
+                        station.getLongitude().doubleValue()
+                )))
                 .toList();
     }
-    private double distance(double a,double b,double c,double d){double x=Math.toRadians(c-a),y=Math.toRadians(d-b);double h=Math.sin(x/2)*Math.sin(x/2)+Math.cos(Math.toRadians(a))*Math.cos(Math.toRadians(c))*Math.sin(y/2)*Math.sin(y/2);return 6371*2*Math.atan2(Math.sqrt(h),Math.sqrt(1-h));}
-    private void validateCoordinates(ChargingStation s){if(s.getLatitude()==null||s.getLongitude()==null||s.getLatitude().doubleValue()<-90||s.getLatitude().doubleValue()>90||s.getLongitude().doubleValue()<-180||s.getLongitude().doubleValue()>180)throw new ResponseStatusException(HttpStatus.BAD_REQUEST,"Invalid coordinates");if(s.getPowerKw()==null||s.getPowerKw().signum()<=0)throw new ResponseStatusException(HttpStatus.BAD_REQUEST,"powerKw must be positive");}
 
-    public List<ChargerAvailability> windows(Long id){station(id);return availability.findByStationId(id);}
-    public ChargerAvailability addWindow(String sub,Long id,ChargerAvailability w){ownedStation(sub,id);validTimes(w.getStartTime(),w.getEndTime());w.setStationId(id);if(availability.existsByStationIdAndStartTimeLessThanAndEndTimeGreaterThan(id,w.getEndTime(),w.getStartTime()))throw conflict("Availability overlaps");return availability.save(w);}
-    public ChargerAvailability updateWindow(String sub,Long id,Long wid,ChargerAvailability w){
-        ownedStation(sub,id);
-        ChargerAvailability old=availability.findById(wid).orElseThrow(()->notFound("Availability"));
-        if(!old.getStationId().equals(id))throw notFound("Availability");
-        validTimes(w.getStartTime(),w.getEndTime());
-        if(availability.existsByStationIdAndIdNotAndStartTimeLessThanAndEndTimeGreaterThan(id,wid,w.getEndTime(),w.getStartTime()))throw conflict("Availability overlaps");
-        old.setStartTime(w.getStartTime());old.setEndTime(w.getEndTime());old.setStatus(w.getStatus());
+    private double distance(
+            double lat1,
+            double lon1,
+            double lat2,
+            double lon2
+    ) {
+        double x = Math.toRadians(lat2 - lat1);
+        double y = Math.toRadians(lon2 - lon1);
+
+        double h = Math.sin(x / 2) * Math.sin(x / 2)
+                + Math.cos(Math.toRadians(lat1))
+                * Math.cos(Math.toRadians(lat2))
+                * Math.sin(y / 2) * Math.sin(y / 2);
+
+        return 6371 * 2 * Math.atan2(
+                Math.sqrt(h),
+                Math.sqrt(1 - h)
+        );
+    }
+
+    // --------------------------------------------------
+    // CHARGER AVAILABILITY
+    // --------------------------------------------------
+
+    public List<ChargerAvailability> windows(Long id) {
+        station(id);
+        return availability.findByStationId(id);
+    }
+
+    public ChargerAvailability addWindow(
+            String sub,
+            Long id,
+            ChargerAvailability window
+    ) {
+        ownedStation(sub, id);
+
+        validTimes(window.getStartTime(), window.getEndTime());
+        validateAvailabilityStatus(window.getStatus());
+        window.setStationId(id);
+
+        if (availability.existsByStationIdAndStartTimeLessThanAndEndTimeGreaterThan(
+                id,
+                window.getEndTime(),
+                window.getStartTime()
+        )) {
+            throw conflict("Availability overlaps");
+        }
+
+        return availability.save(window);
+    }
+
+    public ChargerAvailability updateWindow(
+            String sub,
+            Long id,
+            Long windowId,
+            ChargerAvailability input
+    ) {
+        ownedStation(sub, id);
+
+        ChargerAvailability old = availability.findById(windowId)
+                .orElseThrow(() -> notFound("Availability"));
+
+        if (!old.getStationId().equals(id)) {
+            throw notFound("Availability");
+        }
+
+        validTimes(input.getStartTime(), input.getEndTime());
+        validateAvailabilityStatus(input.getStatus());
+
+        if (availability.existsByStationIdAndIdNotAndStartTimeLessThanAndEndTimeGreaterThan(
+                id,
+                windowId,
+                input.getEndTime(),
+                input.getStartTime()
+        )) {
+            throw conflict("Availability overlaps");
+        }
+
+        old.setStartTime(input.getStartTime());
+        old.setEndTime(input.getEndTime());
+        old.setStatus(input.getStatus());
+
         return availability.save(old);
     }
-    public void deleteWindow(String sub,Long id,Long wid){ownedStation(sub,id);availability.delete(availability.findById(wid).filter(w->w.getStationId().equals(id)).orElseThrow(()->notFound("Availability")));}
 
-    @Transactional public Booking createBooking(String sub,Booking b){
-        if (b.getVehicleId() == null) throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "vehicleId is required");
-        if (b.getStationId() == null) throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "stationId is required");
-        AppUser u=current(sub);
-        Vehicle vehicle=ownedVehicle(sub,b.getVehicleId());
-        ChargingStation s=station(b.getStationId());
-        validTimes(b.getStartTime(),b.getEndTime());
-        if(vehicle.getConnectorType()!=null&&!vehicle.getConnectorType().isBlank()&&!vehicle.getConnectorType().equalsIgnoreCase(s.getConnectorType()))throw conflict("Vehicle connector is incompatible with station");
-        if(!availability.existsByStationIdAndStartTimeLessThanAndEndTimeGreaterThan(s.getId(),b.getEndTime(),b.getStartTime()))throw conflict("Requested time is not available");
-        if(bookings.existsByStationIdAndStatusInAndStartTimeLessThanAndEndTimeGreaterThan(s.getId(),List.of("PENDING","CONFIRMED"),b.getEndTime(),b.getStartTime()))throw conflict("Station is already booked");
-        b.setSeekerUserId(u.getId());b.setStatus("PENDING");
-        b.setEstimatedCost(estimateCost(s,b.getStartTime(),b.getEndTime()));
-        return bookings.save(b);
-    }
-    /** Price per kWh multiplied by the booked duration, never the unit price. */
-    private BigDecimal estimateCost(ChargingStation s,Instant start,Instant end){
-        if(s.getPricePerKwh()==null||start==null||end==null) return null;
-        long seconds=Duration.between(start,end).getSeconds();
-        if(seconds<=0) return null;
-        BigDecimal hours=BigDecimal.valueOf(seconds).divide(BigDecimal.valueOf(3600),6,RoundingMode.HALF_UP);
-        return s.getPricePerKwh().multiply(hours).setScale(2,RoundingMode.HALF_UP);
-    }
-    public List<Booking> bookings(String sub){return bookings.findBySeekerUserId(current(sub).getId());}
-    public Booking booking(String sub,Long id){Booking b=bookings.findById(id).orElseThrow(()->notFound("Booking"));AppUser u=current(sub);if(!Objects.equals(b.getSeekerUserId(),u.getId())&&!Objects.equals(stations.findById(b.getStationId()).map(ChargingStation::getOwnerUserId).orElse(null),u.getId()))throw forbidden();return b;}
-    /**
-     * The vehicle owner ({@code seekerUserId}) may cancel their own request.
-     * Providers must not cancel someone else's booking.
-     */
-    @Transactional public Booking cancelBooking(String sub,Long id){
-        Booking b=booking(sub,id);
-        if(!Objects.equals(b.getSeekerUserId(),current(sub).getId())) throw forbidden();
-        if(!b.getStatus().equals("PENDING")&&!b.getStatus().equals("CONFIRMED"))throw conflict("Only pending or confirmed bookings can be cancelled");
-        b.setStatus("CANCELLED");
-        return bookings.save(b);
-    }
-    /**
-     * Only the owner of the station may confirm or reject a request. This is the
-     * provider decision endpoint; a seeker can never approve their own booking.
-     */
-    @Transactional public Booking decideBooking(String sub,Long id,String status){
-        if(!"CONFIRMED".equals(status)&&!"REJECTED".equals(status))throw new ResponseStatusException(HttpStatus.BAD_REQUEST,"status must be CONFIRMED or REJECTED");
-        Booking b=booking(sub,id);
-        ChargingStation s=stations.findById(b.getStationId()).orElseThrow(()->notFound("Station"));
-        if(!Objects.equals(s.getOwnerUserId(),current(sub).getId())) throw forbidden();
-        if(!b.getStatus().equals("PENDING"))throw conflict("Booking is not pending");
-        b.setStatus(status);
-        return bookings.save(b);
-    }
-    public List<Booking> stationBookings(String sub,Long id){ownedStation(sub,id);return bookings.findByStationId(id);}
+    public void deleteWindow(
+            String sub,
+            Long id,
+            Long windowId
+    ) {
+        ownedStation(sub, id);
 
-    @Transactional public ChargingSession startSession(String sub,Long bookingId){Booking b=booking(sub,bookingId);if(!b.getStatus().equals("CONFIRMED"))throw conflict("Booking must be confirmed");if(sessions.findByBookingId(bookingId).isPresent())throw conflict("Session already exists");ChargingSession s=new ChargingSession();s.setBookingId(bookingId);s.setActualStartTime(Instant.now());return sessions.save(s);}
-    public ChargingSession session(String sub,Long id){ChargingSession s=sessions.findById(id).orElseThrow(()->notFound("Session"));booking(sub,s.getBookingId());return s;}
-    public ChargingSession completeSession(String sub,Long id,ChargingSession input){ChargingSession s=session(sub,id);if(!s.getStatus().equals("IN_PROGRESS"))throw conflict("Session is not active");if(input.getEnergyConsumedKwh()==null||input.getEnergyConsumedKwh().signum()<0)throw new ResponseStatusException(HttpStatus.BAD_REQUEST,"energyConsumedKwh must be non-negative");s.setEnergyConsumedKwh(input.getEnergyConsumedKwh());s.setFinalCost(input.getFinalCost());s.setActualEndTime(Instant.now());s.setStatus("COMPLETED");return sessions.save(s);}
-    public List<ChargingSession> mySessions(String sub){return bookings(sub).stream().map(Booking::getId).flatMap(id->sessions.findByBookingId(id).stream()).toList();}
-    public List<StationImage> images(Long id){station(id);return images.findByStationId(id);}
-    public StationImage addImage(String sub,Long id,StationImage input){ownedStation(sub,id);if(input.getS3ObjectKey()==null||input.getS3ObjectKey().isBlank())throw new ResponseStatusException(HttpStatus.BAD_REQUEST,"s3ObjectKey is required");input.setStationId(id);return images.save(input);}
-    public void deleteImage(String sub,Long id,Long imageId){ownedStation(sub,id);images.delete(images.findById(imageId).filter(i->i.getStationId().equals(id)).orElseThrow(()->notFound("Image")));}
-    private void validTimes(Instant a,Instant b){if(a==null||b==null||!b.isAfter(a))throw new ResponseStatusException(HttpStatus.BAD_REQUEST,"endTime must be after startTime");}
-    private String required(String v,String name){if(v==null||v.isBlank())throw new ResponseStatusException(HttpStatus.BAD_REQUEST,name+" is required");return v;}
-    private ResponseStatusException notFound(String x){return new ResponseStatusException(HttpStatus.NOT_FOUND,x+" not found");}
-    private ResponseStatusException forbidden(){return new ResponseStatusException(HttpStatus.FORBIDDEN,"Not authorized");}
-    private ResponseStatusException conflict(String x){return new ResponseStatusException(HttpStatus.CONFLICT,x);}
+        availability.delete(
+                availability.findById(windowId)
+                        .filter(window -> window.getStationId().equals(id))
+                        .orElseThrow(() -> notFound("Availability"))
+        );
+    }
+
+    // --------------------------------------------------
+    // BOOKINGS
+    // --------------------------------------------------
+
+    @Transactional
+    public Booking createBooking(String sub, Booking booking) {
+        requireRole(sub, "VEHICLE_OWNER");
+        if (booking.getVehicleId() == null) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "vehicleId is required"
+            );
+        }
+
+        if (booking.getStationId() == null) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "stationId is required"
+            );
+        }
+
+        AppUser user = current(sub);
+
+        Vehicle vehicle = ownedVehicle(sub, booking.getVehicleId());
+        ChargingStation station = station(booking.getStationId());
+
+        validTimes(booking.getStartTime(), booking.getEndTime());
+
+        if (vehicle.getConnectorType() != null
+                && !vehicle.getConnectorType().isBlank()
+                && !vehicle.getConnectorType().equalsIgnoreCase(
+                        station.getConnectorType()
+                )) {
+            throw conflict("Vehicle connector is incompatible with station");
+        }
+
+        // The availability window must contain the entire requested period.
+        // Partial overlap is not sufficient.
+        if (!availability
+                .existsByStationIdAndStatusAndStartTimeLessThanEqualAndEndTimeGreaterThanEqual(
+                        station.getId(),
+                        "AVAILABLE",
+                        booking.getStartTime(),
+                        booking.getEndTime()
+                )) {
+            throw conflict(
+                    "Requested time is not fully available"
+            );
+        }
+
+        if (bookings.existsByStationIdAndStatusInAndStartTimeLessThanAndEndTimeGreaterThan(
+                station.getId(),
+                List.of("PENDING", "CONFIRMED"),
+                booking.getEndTime(),
+                booking.getStartTime()
+        )) {
+            throw conflict("Station is already booked");
+        }
+
+        booking.setSeekerUserId(user.getId());
+        booking.setStatus("PENDING");
+        booking.setEstimatedCost(
+                estimateCost(
+                        station,
+                        booking.getStartTime(),
+                        booking.getEndTime()
+                )
+        );
+
+        return bookings.save(booking);
+    }
+
+    /**
+     * Estimated cost:
+     * price per kWh × rated station power × booked duration.
+     *
+     * This is an approximation. Actual cost is calculated
+     * from measured energy when the session is completed.
+     */
+    private BigDecimal estimateCost(
+            ChargingStation station,
+            Instant start,
+            Instant end
+    ) {
+        if (station.getPricePerKwh() == null
+                || station.getPowerKw() == null
+                || start == null
+                || end == null) {
+            return null;
+        }
+
+        long seconds = Duration.between(start, end).getSeconds();
+
+        if (seconds <= 0) {
+            return null;
+        }
+
+        BigDecimal hours = BigDecimal.valueOf(seconds)
+                .divide(
+                        BigDecimal.valueOf(3600),
+                        6,
+                        RoundingMode.HALF_UP
+                );
+
+        return station.getPricePerKwh()
+                .multiply(station.getPowerKw())
+                .multiply(hours)
+                .setScale(2, RoundingMode.HALF_UP);
+    }
+
+    public List<Booking> bookings(String sub) {
+        return bookings.findBySeekerUserId(current(sub).getId());
+    }
+
+    public Booking booking(String sub, Long id) {
+        Booking booking = bookings.findById(id)
+                .orElseThrow(() -> notFound("Booking"));
+
+        AppUser user = current(sub);
+
+        Long stationOwnerId = stations.findById(booking.getStationId())
+                .map(ChargingStation::getOwnerUserId)
+                .orElse(null);
+
+        if (!Objects.equals(booking.getSeekerUserId(), user.getId())
+                && !Objects.equals(stationOwnerId, user.getId())) {
+            throw forbidden();
+        }
+
+        return booking;
+    }
+
+    /**
+     * Only the vehicle owner may cancel their booking.
+     * A booking cannot be cancelled after a charging session exists.
+     */
+    @Transactional
+    public Booking cancelBooking(String sub, Long id) {
+        Booking booking = booking(sub, id);
+
+        if (!Objects.equals(
+                booking.getSeekerUserId(),
+                current(sub).getId()
+        )) {
+            throw forbidden();
+        }
+
+        if (!"PENDING".equals(booking.getStatus())
+                && !"CONFIRMED".equals(booking.getStatus())) {
+            throw conflict(
+                    "Only pending or confirmed bookings can be cancelled"
+            );
+        }
+
+        if (sessions.findByBookingId(id).isPresent()) {
+            throw conflict(
+                    "Booking cannot be cancelled after a charging session has started"
+            );
+        }
+
+        booking.setStatus("CANCELLED");
+        return bookings.save(booking);
+    }
+
+    /**
+     * Only the station owner may confirm or reject a booking.
+     */
+    @Transactional
+    public Booking decideBooking(
+            String sub,
+            Long id,
+            String status
+    ) {
+        if (!"CONFIRMED".equals(status)
+                && !"REJECTED".equals(status)) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "status must be CONFIRMED or REJECTED"
+            );
+        }
+
+        Booking booking = booking(sub, id);
+
+        ChargingStation station = stations.findById(booking.getStationId())
+                .orElseThrow(() -> notFound("Station"));
+
+        if (!Objects.equals(
+                station.getOwnerUserId(),
+                current(sub).getId()
+        )) {
+            throw forbidden();
+        }
+
+        if (!"PENDING".equals(booking.getStatus())) {
+            throw conflict("Booking is not pending");
+        }
+
+        booking.setStatus(status);
+        return bookings.save(booking);
+    }
+
+    public List<Booking> stationBookings(String sub, Long id) {
+        ownedStation(sub, id);
+        return bookings.findByStationId(id);
+    }
+
+    // --------------------------------------------------
+    // CHARGING SESSIONS
+    // --------------------------------------------------
+
+    /**
+     * Returns a booking only if the authenticated user is its station owner
+     * and has the CHARGER_PROVIDER role.
+     */
+    private Booking providerBooking(String sub, Long bookingId) {
+        requireRole(sub, "CHARGER_PROVIDER");
+
+        Booking booking = bookings.findById(bookingId)
+                .orElseThrow(() -> notFound("Booking"));
+
+        ChargingStation station = stations.findById(booking.getStationId())
+                .orElseThrow(() -> notFound("Station"));
+
+        if (!Objects.equals(
+                station.getOwnerUserId(),
+                current(sub).getId()
+        )) {
+            throw forbidden();
+        }
+
+        return booking;
+    }
+
+    @Transactional
+    public ChargingSession startSession(
+            String sub,
+            Long bookingId
+    ) {
+        Booking booking = bookings.findById(bookingId)
+                .orElseThrow(() -> notFound("Booking"));
+
+        AppUser actor = current(sub);
+
+        boolean isSeeker = Objects.equals(
+                booking.getSeekerUserId(),
+                actor.getId()
+        );
+
+        if (!isSeeker) {
+            requireRole(sub, "CHARGER_PROVIDER");
+
+            ChargingStation station = stations.findById(booking.getStationId())
+                    .orElseThrow(() -> notFound("Station"));
+
+            if (!Objects.equals(
+                    station.getOwnerUserId(),
+                    actor.getId()
+            )) {
+                throw forbidden();
+            }
+        }
+
+        if (!"CONFIRMED".equals(booking.getStatus())) {
+            throw conflict("Booking must be confirmed");
+        }
+
+        if (sessions.findByBookingId(bookingId).isPresent()) {
+            throw conflict("Session already exists");
+        }
+
+        ChargingSession session = new ChargingSession();
+        session.setBookingId(bookingId);
+        session.setActualStartTime(Instant.now());
+
+        try {
+            return sessions.saveAndFlush(session);
+        } catch (DataIntegrityViolationException exception) {
+            throw conflict(
+                    "A charging session already exists for this booking"
+            );
+        }
+    }
+
+    /**
+     * Session details can be viewed by either the vehicle owner
+     * or the station owner.
+     */
+    public ChargingSession session(String sub, Long id) {
+        ChargingSession session = sessions.findById(id)
+                .orElseThrow(() -> notFound("Session"));
+
+        booking(sub, session.getBookingId());
+
+        return session;
+    }
+
+    public ChargingSession sessionByBooking(
+            String sub,
+            Long bookingId
+    ) {
+        booking(sub, bookingId);
+
+        return sessions.findByBookingId(bookingId)
+                .orElseThrow(() -> notFound("Session"));
+    }
+
+    @Transactional
+    public ChargingSession completeSession(
+            String sub,
+            Long id,
+            ChargingSession input
+    ) {
+        ChargingSession session = sessions.findById(id)
+                .orElseThrow(() -> notFound("Session"));
+
+        // Completion is restricted to the station owner.
+        Booking booking = providerBooking(sub, session.getBookingId());
+
+        if (!"IN_PROGRESS".equals(session.getStatus())) {
+            throw conflict("Session is not active");
+        }
+
+        BigDecimal energy = input.getEnergyConsumedKwh();
+
+        if (energy == null || energy.signum() <= 0) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "energyConsumedKwh must be greater than zero"
+            );
+        }
+
+        ChargingStation station = stations.findById(booking.getStationId())
+                .orElseThrow(() -> notFound("Station"));
+
+        BigDecimal pricePerKwh = station.getPricePerKwh();
+
+        if (pricePerKwh == null || pricePerKwh.signum() < 0) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "Station price is invalid"
+            );
+        }
+
+        // Actual bill = measured energy × station price per kWh.
+        BigDecimal finalCost = energy
+                .multiply(pricePerKwh)
+                .setScale(2, RoundingMode.HALF_UP);
+
+        session.setEnergyConsumedKwh(energy);
+        session.setFinalCost(finalCost);
+        session.setActualEndTime(Instant.now());
+        session.setStatus("COMPLETED");
+
+        return sessions.save(session);
+    }
+
+    public List<ChargingSession> mySessions(String sub) {
+        return bookings(sub).stream()
+                .map(Booking::getId)
+                .flatMap(id -> sessions.findByBookingId(id).stream())
+                .toList();
+    }
+
+    // --------------------------------------------------
+    // STATION IMAGES
+    // --------------------------------------------------
+
+    public List<StationImage> images(Long id) {
+        station(id);
+        return images.findByStationId(id);
+    }
+
+    public StationImage addImage(
+            String sub,
+            Long id,
+            StationImage input
+    ) {
+        ownedStation(sub, id);
+
+        if (input.getS3ObjectKey() == null
+                || input.getS3ObjectKey().isBlank()) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "s3ObjectKey is required"
+            );
+        }
+
+        input.setStationId(id);
+        return images.save(input);
+    }
+
+    public void deleteImage(
+            String sub,
+            Long id,
+            Long imageId
+    ) {
+        ownedStation(sub, id);
+
+        images.delete(
+                images.findById(imageId)
+                        .filter(image -> image.getStationId().equals(id))
+                        .orElseThrow(() -> notFound("Image"))
+        );
+    }
+
+    // --------------------------------------------------
+    // COMMON VALIDATION AND ERRORS
+    // --------------------------------------------------
+
+    private void validTimes(Instant start, Instant end) {
+        if (start == null || end == null || !end.isAfter(start)) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "endTime must be after startTime"
+            );
+        }
+    }
+
+    private void validateAvailabilityStatus(String status) {
+        if (status == null || status.isBlank()) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "status is required"
+            );
+        }
+
+        if (!"AVAILABLE".equals(status)) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "status must be AVAILABLE"
+            );
+        }
+    }
+
+    private String required(String value, String name) {
+        if (value == null || value.isBlank()) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    name + " is required"
+            );
+        }
+
+        return value;
+    }
+
+    private ResponseStatusException notFound(String name) {
+        return new ResponseStatusException(
+                HttpStatus.NOT_FOUND,
+                name + " not found"
+        );
+    }
+
+    private ResponseStatusException forbidden() {
+        return new ResponseStatusException(
+                HttpStatus.FORBIDDEN,
+                "Not authorized"
+        );
+    }
+
+    private ResponseStatusException conflict(String message) {
+        return new ResponseStatusException(
+                HttpStatus.CONFLICT,
+                message
+        );
+    }
 }

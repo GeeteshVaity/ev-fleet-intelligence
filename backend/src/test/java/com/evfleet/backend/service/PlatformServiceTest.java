@@ -4,6 +4,7 @@ import com.evfleet.backend.model.AppUser;
 import com.evfleet.backend.model.ChargingStation;
 import com.evfleet.backend.model.Vehicle;
 import com.evfleet.backend.model.Booking;
+import com.evfleet.backend.model.ChargingSession;
 import com.evfleet.backend.repository.*;
 import com.evfleet.backend.controller.UserController;
 import org.junit.jupiter.api.BeforeEach;
@@ -196,7 +197,10 @@ class PlatformServiceTest {
         setId(station, 8L);
         when(vehicles.findById(7L)).thenReturn(Optional.of(vehicle));
         when(stations.findById(8L)).thenReturn(Optional.of(station));
-        when(availability.existsByStationIdAndStartTimeLessThanAndEndTimeGreaterThan(any(), any(), any())).thenReturn(true);
+        when(availability
+                .existsByStationIdAndStatusAndStartTimeLessThanEqualAndEndTimeGreaterThanEqual(
+                        any(), any(), any(), any()))
+                .thenReturn(true);
         when(bookings.existsByStationIdAndStatusInAndStartTimeLessThanAndEndTimeGreaterThan(any(), any(), any(), any())).thenReturn(true);
 
         assertThatThrownBy(() -> service.createBooking("user-1", booking(7L, 8L)))
@@ -324,6 +328,44 @@ class PlatformServiceTest {
         assertThat(service.cancelBooking("user-1", 9L).getStatus()).isEqualTo("CANCELLED");
     }
 
+    @Test
+    void cannotCancelBookingAfterSessionStarts() {
+        setId(user, 1L);
+        Booking booking = booking(7L, 8L);
+        booking.setSeekerUserId(1L);
+        booking.setStatus("CONFIRMED");
+        setId(booking, 9L);
+        when(bookings.findById(9L)).thenReturn(Optional.of(booking));
+        when(sessions.findByBookingId(9L))
+                .thenReturn(Optional.of(new ChargingSession()));
+
+        assertThatThrownBy(() -> service.cancelBooking("user-1", 9L))
+                .isInstanceOf(ResponseStatusException.class)
+                .hasMessageContaining("after a charging session");
+        verify(bookings, never()).save(any());
+    }
+
+    @Test
+    void rejectsDecisionForNonPendingBooking() {
+        setId(user, 2L);
+        Booking booking = booking(7L, 8L);
+        booking.setSeekerUserId(1L);
+        booking.setStatus("CONFIRMED");
+        setId(booking, 9L);
+        ChargingStation station = station(
+                new BigDecimal("18.5204"),
+                new BigDecimal("73.8567")
+        );
+        station.setOwnerUserId(2L);
+        when(bookings.findById(9L)).thenReturn(Optional.of(booking));
+        when(stations.findById(8L)).thenReturn(Optional.of(station));
+
+        assertThatThrownBy(() -> service.decideBooking("user-1", 9L, "REJECTED"))
+                .isInstanceOf(ResponseStatusException.class)
+                .hasMessageContaining("not pending");
+        verify(bookings, never()).save(any());
+    }
+
     // -----------------------------------------------------------------------
     // Booking input validation and pricing.
     // -----------------------------------------------------------------------
@@ -341,6 +383,17 @@ class PlatformServiceTest {
     }
 
     @Test
+    void rejectsBookingCreationForChargingProvider() {
+        user.setRole("CHARGER_PROVIDER");
+        Booking booking = booking(7L, 8L);
+
+        assertThatThrownBy(() -> service.createBooking("user-1", booking))
+                .isInstanceOf(ResponseStatusException.class)
+                .hasMessageContaining("Not authorized");
+        verifyNoInteractions(vehicles, stations, availability, bookings);
+    }
+
+    @Test
     void estimatesCostFromDurationNotUnitPrice() {
         setId(user, 1L);
         Vehicle vehicle = new Vehicle();
@@ -353,7 +406,10 @@ class PlatformServiceTest {
         setId(station, 8L);
         when(vehicles.findById(7L)).thenReturn(Optional.of(vehicle));
         when(stations.findById(8L)).thenReturn(Optional.of(station));
-        when(availability.existsByStationIdAndStartTimeLessThanAndEndTimeGreaterThan(any(), any(), any())).thenReturn(true);
+        when(availability
+                .existsByStationIdAndStatusAndStartTimeLessThanEqualAndEndTimeGreaterThanEqual(
+                        any(), any(), any(), any()))
+                .thenReturn(true);
         when(bookings.existsByStationIdAndStatusInAndStartTimeLessThanAndEndTimeGreaterThan(any(), any(), any(), any())).thenReturn(false);
         when(bookings.save(any(Booking.class))).thenAnswer(invocation -> invocation.getArgument(0));
         Booking twoHours = booking(7L, 8L);
@@ -363,6 +419,123 @@ class PlatformServiceTest {
 
         assertThat(created.getEstimatedCost()).isEqualByComparingTo("20.00");
         assertThat(created.getStatus()).isEqualTo("PENDING");
+    }
+
+    @Test
+    void seekerCanStartAConfirmedBookingSession() {
+        setId(user, 1L);
+        Booking booking = booking(7L, 8L);
+        booking.setSeekerUserId(1L);
+        booking.setStatus("CONFIRMED");
+        setId(booking, 9L);
+        ChargingStation station = station(
+                new BigDecimal("18.5204"),
+                new BigDecimal("73.8567")
+        );
+        station.setOwnerUserId(2L);
+        when(bookings.findById(9L)).thenReturn(Optional.of(booking));
+        when(sessions.findByBookingId(9L)).thenReturn(Optional.empty());
+        when(sessions.saveAndFlush(any(ChargingSession.class)))
+                .thenAnswer(invocation -> invocation.getArgument(0));
+
+        ChargingSession session = service.startSession("user-1", 9L);
+
+        assertThat(session.getBookingId()).isEqualTo(9L);
+        assertThat(session.getStatus()).isEqualTo("IN_PROGRESS");
+        assertThat(session.getActualStartTime()).isNotNull();
+    }
+
+    @Test
+    void stationOwnerCanStartAConfirmedBookingSession() {
+        user.setRole("CHARGER_PROVIDER");
+        setId(user, 2L);
+        Booking booking = booking(7L, 8L);
+        booking.setSeekerUserId(1L);
+        booking.setStatus("CONFIRMED");
+        setId(booking, 9L);
+        ChargingStation station = station(
+                new BigDecimal("18.5204"),
+                new BigDecimal("73.8567")
+        );
+        station.setOwnerUserId(2L);
+        when(bookings.findById(9L)).thenReturn(Optional.of(booking));
+        when(stations.findById(8L)).thenReturn(Optional.of(station));
+        when(sessions.findByBookingId(9L)).thenReturn(Optional.empty());
+        when(sessions.saveAndFlush(any(ChargingSession.class)))
+                .thenAnswer(invocation -> invocation.getArgument(0));
+
+        ChargingSession session = service.startSession("user-1", 9L);
+
+        assertThat(session.getBookingId()).isEqualTo(9L);
+    }
+
+    @Test
+    void providerCompletesSessionAndCalculatesMeasuredEnergyCost() {
+        user.setRole("CHARGER_PROVIDER");
+        setId(user, 2L);
+        Booking booking = booking(7L, 8L);
+        booking.setSeekerUserId(1L);
+        booking.setStatus("CONFIRMED");
+        setId(booking, 9L);
+        ChargingStation station = station(
+                new BigDecimal("18.5204"),
+                new BigDecimal("73.8567")
+        );
+        station.setOwnerUserId(2L);
+        station.setPricePerKwh(new BigDecimal("14.50"));
+        ChargingSession session = new ChargingSession();
+        session.setBookingId(9L);
+        session.setStatus("IN_PROGRESS");
+        setId(session, 10L);
+        when(sessions.findById(10L)).thenReturn(Optional.of(session));
+        when(bookings.findById(9L)).thenReturn(Optional.of(booking));
+        when(stations.findById(8L)).thenReturn(Optional.of(station));
+        when(sessions.save(session)).thenReturn(session);
+
+        ChargingSession completed = service.completeSession(
+                "user-1",
+                10L,
+                energyInput("18.4")
+        );
+
+        assertThat(completed.getStatus()).isEqualTo("COMPLETED");
+        assertThat(completed.getEnergyConsumedKwh())
+                .isEqualByComparingTo("18.4");
+        assertThat(completed.getFinalCost())
+                .isEqualByComparingTo("266.80");
+        assertThat(completed.getActualEndTime()).isNotNull();
+    }
+
+    @Test
+    void rejectsNonPositiveMeasuredEnergy() {
+        user.setRole("CHARGER_PROVIDER");
+        setId(user, 2L);
+        Booking booking = booking(7L, 8L);
+        booking.setSeekerUserId(1L);
+        booking.setStatus("CONFIRMED");
+        setId(booking, 9L);
+        ChargingStation station = station(
+                new BigDecimal("18.5204"),
+                new BigDecimal("73.8567")
+        );
+        station.setOwnerUserId(2L);
+        station.setPricePerKwh(new BigDecimal("14.50"));
+        ChargingSession session = new ChargingSession();
+        session.setBookingId(9L);
+        session.setStatus("IN_PROGRESS");
+        setId(session, 10L);
+        when(sessions.findById(10L)).thenReturn(Optional.of(session));
+        when(bookings.findById(9L)).thenReturn(Optional.of(booking));
+        when(stations.findById(8L)).thenReturn(Optional.of(station));
+
+        assertThatThrownBy(() -> service.completeSession(
+                "user-1",
+                10L,
+                energyInput("0")
+        ))
+                .isInstanceOf(ResponseStatusException.class)
+                .hasMessageContaining("greater than zero");
+        verify(sessions, never()).save(any());
     }
 
     @Test
@@ -408,6 +581,12 @@ class PlatformServiceTest {
         booking.setStartTime(Instant.parse("2026-10-22T10:00:00Z"));
         booking.setEndTime(Instant.parse("2026-10-22T11:00:00Z"));
         return booking;
+    }
+
+    private ChargingSession energyInput(String energy) {
+        ChargingSession input = new ChargingSession();
+        input.setEnergyConsumedKwh(new BigDecimal(energy));
+        return input;
     }
 
     private void setId(Object entity, Long id) {

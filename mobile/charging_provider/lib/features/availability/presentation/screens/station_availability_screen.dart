@@ -6,27 +6,23 @@ import '../../../../core/theme/app_colors.dart';
 class AvailabilityWindow {
   const AvailabilityWindow({
     required this.id,
-    required this.dayOfWeek,
     required this.startTime,
     required this.endTime,
   });
 
   final String id;
-  final String dayOfWeek;
-  final String startTime;
-  final String endTime;
+  final DateTime startTime;
+  final DateTime endTime;
 }
 
 class _WindowDraft {
   const _WindowDraft({
-    required this.dayOfWeek,
     required this.startTime,
     required this.endTime,
   });
 
-  final String dayOfWeek;
-  final String startTime;
-  final String endTime;
+  final DateTime startTime;
+  final DateTime endTime;
 }
 
 class StationAvailabilityScreen extends StatefulWidget {
@@ -47,14 +43,12 @@ class StationAvailabilityScreen extends StatefulWidget {
   final List<AvailabilityWindow> windows;
 
   final void Function({
-    required String dayOfWeek,
     required String startTime,
     required String endTime,
   }) onAddWindow;
 
   final void Function({
     required String windowId,
-    required String dayOfWeek,
     required String startTime,
     required String endTime,
   }) onUpdateWindow;
@@ -70,52 +64,20 @@ class StationAvailabilityScreen extends StatefulWidget {
 
 class _StationAvailabilityScreenState
     extends State<StationAvailabilityScreen> {
-  static const List<String> _days = [
-    'Monday',
-    'Tuesday',
-    'Wednesday',
-    'Thursday',
-    'Friday',
-    'Saturday',
-    'Sunday',
-  ];
-
-  String _formatTime(TimeOfDay time) {
-    return '${time.hour.toString().padLeft(2, '0')}:'
-        '${time.minute.toString().padLeft(2, '0')}';
-  }
-
-  TimeOfDay _parseTime(String value) {
-    final parts = value.split(':');
-
-    return TimeOfDay(
-      hour: int.parse(parts[0]),
-      minute: int.parse(parts[1]),
-    );
-  }
-
-  int _minutesFromMidnight(String value) {
-    final time = _parseTime(value);
-    return time.hour * 60 + time.minute;
-  }
-
-  String _displayTime(BuildContext context, String value) {
-    return _parseTime(value).format(context);
+  String _displayDateTime(BuildContext context, DateTime value) {
+    final date = MaterialLocalizations.of(context).formatMediumDate(value);
+    final time = TimeOfDay.fromDateTime(value).format(context);
+    return '$date, $time';
   }
 
   Future<_WindowDraft?> _showWindowDialog({
     AvailabilityWindow? existingWindow,
   }) async {
-    String selectedDay =
-        existingWindow?.dayOfWeek ?? 'Monday';
-
-    TimeOfDay startTime = existingWindow != null
-        ? _parseTime(existingWindow.startTime)
-        : const TimeOfDay(hour: 9, minute: 0);
-
-    TimeOfDay endTime = existingWindow != null
-        ? _parseTime(existingWindow.endTime)
-        : const TimeOfDay(hour: 18, minute: 0);
+    final now = DateTime.now();
+    DateTime startTime = existingWindow?.startTime ??
+        DateTime(now.year, now.month, now.day + 1, 9);
+    DateTime endTime = existingWindow?.endTime ??
+        DateTime(now.year, now.month, now.day + 1, 18);
 
     return showDialog<_WindowDraft>(
       context: context,
@@ -135,29 +97,35 @@ class _StationAvailabilityScreenState
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
                   Text(
-                    'Day of Week',
+                    'Start date and time',
                     style: theme.textTheme.labelLarge,
                   ),
                   const SizedBox(height: 8),
 
-                  DropdownButtonFormField<String>(
-                    value: selectedDay,
-                    decoration: const InputDecoration(
-                      prefixIcon: Icon(Icons.calendar_today_outlined),
-                    ),
-                    items: _days.map((day) {
-                      return DropdownMenuItem(
-                        value: day,
-                        child: Text(day),
+                  OutlinedButton.icon(
+                    onPressed: () async {
+                      final date = await showDatePicker(
+                        context: dialogContext,
+                        firstDate: DateTime.now(),
+                        lastDate: DateTime.now().add(
+                          const Duration(days: 365),
+                        ),
+                        initialDate: startTime,
                       );
-                    }).toList(),
-                    onChanged: (value) {
-                      if (value != null) {
+                      if (date != null) {
                         dialogSetState(() {
-                          selectedDay = value;
+                          startTime = DateTime(
+                            date.year,
+                            date.month,
+                            date.day,
+                            startTime.hour,
+                            startTime.minute,
+                          );
                         });
                       }
                     },
+                    icon: const Icon(Icons.calendar_today_outlined),
+                    label: Text(_displayDateTime(context, startTime)),
                   ),
 
                   const SizedBox(height: 20),
@@ -172,42 +140,80 @@ class _StationAvailabilityScreenState
                     onPressed: () async {
                       final selected = await showTimePicker(
                         context: dialogContext,
-                        initialTime: startTime,
+                        initialTime: TimeOfDay.fromDateTime(startTime),
                       );
 
                       if (selected != null) {
                         dialogSetState(() {
-                          startTime = selected;
+                          startTime = DateTime(
+                            startTime.year,
+                            startTime.month,
+                            startTime.day,
+                            selected.hour,
+                            selected.minute,
+                          );
                         });
                       }
                     },
                     icon: const Icon(Icons.access_time_rounded),
-                    label: Text(startTime.format(context)),
+                    label: Text(TimeOfDay.fromDateTime(startTime).format(context)),
                   ),
 
                   const SizedBox(height: 16),
 
                   Text(
-                    'End Time',
+                    'End date and time',
                     style: theme.textTheme.labelLarge,
                   ),
                   const SizedBox(height: 8),
 
                   OutlinedButton.icon(
                     onPressed: () async {
+                      final date = await showDatePicker(
+                        context: dialogContext,
+                        firstDate: startTime,
+                        lastDate: DateTime.now().add(
+                          const Duration(days: 365),
+                        ),
+                        initialDate: endTime,
+                      );
+                      if (date != null) {
+                        dialogSetState(() {
+                          endTime = DateTime(
+                            date.year,
+                            date.month,
+                            date.day,
+                            endTime.hour,
+                            endTime.minute,
+                          );
+                        });
+                      }
+                    },
+                    icon: const Icon(Icons.calendar_today_outlined),
+                    label: Text(_displayDateTime(context, endTime)),
+                  ),
+                  const SizedBox(height: 8),
+                  OutlinedButton.icon(
+                    onPressed: () async {
                       final selected = await showTimePicker(
                         context: dialogContext,
-                        initialTime: endTime,
+                        initialTime: TimeOfDay.fromDateTime(endTime),
                       );
 
                       if (selected != null) {
                         dialogSetState(() {
-                          endTime = selected;
+                          endTime = DateTime(
+                            endTime.year,
+                            endTime.month,
+                            endTime.day,
+                            selected.hour,
+                            selected.minute,
+                          );
                         });
                       }
                     },
                     icon: const Icon(Icons.access_time_rounded),
-                    label: Text(endTime.format(context)),
+                    label: Text(TimeOfDay.fromDateTime(endTime).format(context)),
                   ),
                 ],
               ),
@@ -220,13 +226,7 @@ class _StationAvailabilityScreenState
                 ),
                 ElevatedButton(
                   onPressed: () {
-                    final startMinutes =
-                        startTime.hour * 60 + startTime.minute;
-
-                    final endMinutes =
-                        endTime.hour * 60 + endTime.minute;
-
-                    if (endMinutes <= startMinutes) {
+                    if (!endTime.isAfter(startTime)) {
                       ScaffoldMessenger.of(context).showSnackBar(
                         const SnackBar(
                           content: Text(
@@ -240,9 +240,8 @@ class _StationAvailabilityScreenState
                     Navigator.pop(
                       dialogContext,
                       _WindowDraft(
-                        dayOfWeek: selectedDay,
-                        startTime: _formatTime(startTime),
-                        endTime: _formatTime(endTime),
+                        startTime: startTime,
+                        endTime: endTime,
                       ),
                     );
                   },
@@ -264,9 +263,8 @@ class _StationAvailabilityScreenState
     if (draft == null || !mounted) return;
 
     widget.onAddWindow(
-      dayOfWeek: draft.dayOfWeek,
-      startTime: draft.startTime,
-      endTime: draft.endTime,
+      startTime: draft.startTime.toUtc().toIso8601String(),
+      endTime: draft.endTime.toUtc().toIso8601String(),
     );
   }
 
@@ -279,9 +277,8 @@ class _StationAvailabilityScreenState
 
     widget.onUpdateWindow(
       windowId: window.id,
-      dayOfWeek: draft.dayOfWeek,
-      startTime: draft.startTime,
-      endTime: draft.endTime,
+      startTime: draft.startTime.toUtc().toIso8601String(),
+      endTime: draft.endTime.toUtc().toIso8601String(),
     );
   }
 
@@ -292,8 +289,9 @@ class _StationAvailabilityScreenState
         return AlertDialog(
           title: const Text('Delete Availability?'),
           content: Text(
-            'Delete the ${window.dayOfWeek} availability window '
-            'from ${window.startTime} to ${window.endTime}?',
+            'Delete the availability window from '
+            '${_displayDateTime(context, window.startTime)} to '
+            '${_displayDateTime(context, window.endTime)}?',
           ),
           actions: [
             TextButton(
@@ -314,23 +312,15 @@ class _StationAvailabilityScreenState
     }
   }
 
-  Map<String, List<AvailabilityWindow>> get _groupedWindows {
+  Map<String, List<AvailabilityWindow>> _groupedWindows(
+    BuildContext context,
+  ) {
     final result = <String, List<AvailabilityWindow>>{};
-
-    for (final day in _days) {
-      final dayWindows = widget.windows
-          .where((window) => window.dayOfWeek == day)
-          .toList()
-        ..sort(
-          (a, b) => _minutesFromMidnight(a.startTime)
-              .compareTo(_minutesFromMidnight(b.startTime)),
-        );
-
-      if (dayWindows.isNotEmpty) {
-        result[day] = dayWindows;
-      }
+    for (final window in widget.windows) {
+      final day = MaterialLocalizations.of(context)
+          .formatMediumDate(window.startTime);
+      result.putIfAbsent(day, () => []).add(window);
     }
-
     return result;
   }
 
@@ -339,7 +329,7 @@ class _StationAvailabilityScreenState
     final theme = Theme.of(context);
     final colors = theme.colorScheme;
 
-    final groupedWindows = _groupedWindows;
+    final groupedWindows = _groupedWindows(context);
 
     return Scaffold(
       appBar: AppBar(
@@ -493,11 +483,11 @@ class _StationAvailabilityScreenState
                                 padding: const EdgeInsets.only(bottom: 10),
                                 child: _AvailabilityCard(
                                   window: window,
-                                  startLabel: _displayTime(
+                                  startLabel: _displayDateTime(
                                     context,
                                     window.startTime,
                                   ),
-                                  endLabel: _displayTime(
+                                  endLabel: _displayDateTime(
                                     context,
                                     window.endTime,
                                   ),
@@ -613,7 +603,7 @@ class _AvailabilityCard extends StatelessWidget {
                 ),
                 const SizedBox(width: 7),
                 Text(
-                  'Available on ${window.dayOfWeek}',
+                  'Availability uses the server calendar timestamps',
                   style: theme.textTheme.bodySmall?.copyWith(
                     color: colors.onSurfaceVariant,
                   ),

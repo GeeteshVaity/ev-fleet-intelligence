@@ -1,4 +1,3 @@
-
 import 'package:flutter/material.dart';
 
 import '../../../../core/theme/app_colors.dart';
@@ -11,7 +10,8 @@ class RegisterScreen extends StatefulWidget {
     this.isLoading = false,
   });
 
-  final void Function({
+
+  final Future<void> Function({
     required String fullName,
     required String email,
     required String mobile,
@@ -49,14 +49,12 @@ class _RegisterScreenState extends State<RegisterScreen> {
   }
 
   bool get _hasMinLength => _passwordController.text.length >= 8;
-  bool get _hasUppercase =>
-      RegExp(r'[A-Z]').hasMatch(_passwordController.text);
-  bool get _hasNumber =>
-      RegExp(r'[0-9]').hasMatch(_passwordController.text);
+  bool get _hasUppercase => RegExp(r'[A-Z]').hasMatch(_passwordController.text);
+  bool get _hasNumber => RegExp(r'[0-9]').hasMatch(_passwordController.text);
   bool get _hasSpecialCharacter =>
       RegExp(r'[^A-Za-z0-9]').hasMatch(_passwordController.text);
 
-  void _handleRegister() {
+  Future<void> _handleRegister() async {
     if (!_formKey.currentState!.validate()) return;
 
     if (!_acceptedTerms) {
@@ -68,7 +66,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
       return;
     }
 
-    widget.onRegister(
+    await widget.onRegister(
       fullName: _nameController.text.trim(),
       email: _emailController.text.trim(),
       mobile: _mobileController.text.trim(),
@@ -106,16 +104,11 @@ class _RegisterScreenState extends State<RegisterScreen> {
     final colors = theme.colorScheme;
 
     return Scaffold(
-      appBar: AppBar(
-        leading: const BackButton(),
-      ),
+      appBar: AppBar(leading: const BackButton()),
       body: SafeArea(
         child: Center(
           child: SingleChildScrollView(
-            padding: const EdgeInsets.symmetric(
-              horizontal: 24,
-              vertical: 12,
-            ),
+            padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
             child: ConstrainedBox(
               constraints: const BoxConstraints(maxWidth: 420),
               child: Form(
@@ -199,14 +192,10 @@ class _RegisterScreenState extends State<RegisterScreen> {
                               controller: _nameController,
                               textCapitalization: TextCapitalization.words,
                               textInputAction: TextInputAction.next,
-                              autofillHints: const [
-                                AutofillHints.name,
-                              ],
+                              autofillHints: const [AutofillHints.name],
                               decoration: const InputDecoration(
                                 hintText: 'Enter your full name',
-                                prefixIcon: Icon(
-                                  Icons.person_outline_rounded,
-                                ),
+                                prefixIcon: Icon(Icons.person_outline_rounded),
                               ),
                               validator: (value) {
                                 if (value == null || value.trim().isEmpty) {
@@ -231,22 +220,17 @@ class _RegisterScreenState extends State<RegisterScreen> {
                               controller: _emailController,
                               keyboardType: TextInputType.emailAddress,
                               textInputAction: TextInputAction.next,
-                              autofillHints: const [
-                                AutofillHints.email,
-                              ],
+                              autofillHints: const [AutofillHints.email],
                               decoration: const InputDecoration(
                                 hintText: 'name@example.com',
-                                prefixIcon: Icon(
-                                  Icons.mail_outline_rounded,
-                                ),
+                                prefixIcon: Icon(Icons.mail_outline_rounded),
                               ),
                               validator: (value) {
                                 if (value == null || value.trim().isEmpty) {
                                   return 'Please enter your email';
                                 }
-                                if (!RegExp(
-                                  r'^[^@\s]+@[^@\s]+\.[^@\s]+$',
-                                ).hasMatch(value.trim())) {
+                                if (!RegExp(r'^[^@\s]+@[^@\s]+\.[^@\s]+$')
+                                    .hasMatch(value.trim())) {
                                   return 'Enter a valid email address';
                                 }
                                 return null;
@@ -293,18 +277,15 @@ class _RegisterScreenState extends State<RegisterScreen> {
                                     ],
                                     decoration: const InputDecoration(
                                       hintText: 'Enter mobile number',
-                                      prefixIcon: Icon(
-                                        Icons.phone_outlined,
-                                      ),
+                                      prefixIcon: Icon(Icons.phone_outlined),
                                     ),
                                     validator: (value) {
                                       if (value == null ||
                                           value.trim().isEmpty) {
                                         return 'Enter mobile number';
                                       }
-                                      if (!RegExp(
-                                        r'^[6-9]\d{9}$',
-                                      ).hasMatch(value.trim())) {
+                                      if (!RegExp(r'^[6-9]\d{9}$')
+                                          .hasMatch(value.trim())) {
                                         return 'Enter a valid 10-digit number';
                                       }
                                       return null;
@@ -317,18 +298,13 @@ class _RegisterScreenState extends State<RegisterScreen> {
                             const SizedBox(height: 18),
 
                             // Password
-                            Text(
-                              'Password',
-                              style: theme.textTheme.labelLarge,
-                            ),
+                            Text('Password', style: theme.textTheme.labelLarge),
                             const SizedBox(height: 8),
                             TextFormField(
                               controller: _passwordController,
                               obscureText: _obscurePassword,
                               textInputAction: TextInputAction.next,
-                              autofillHints: const [
-                                AutofillHints.newPassword,
-                              ],
+                              autofillHints: const [AutofillHints.newPassword],
                               onChanged: (_) => setState(() {}),
                               decoration: InputDecoration(
                                 hintText: 'Create a strong password',
@@ -443,8 +419,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
                                 });
                               },
                               contentPadding: EdgeInsets.zero,
-                              controlAffinity:
-                                  ListTileControlAffinity.leading,
+                              controlAffinity: ListTileControlAffinity.leading,
                               dense: true,
                               title: RichText(
                                 text: TextSpan(

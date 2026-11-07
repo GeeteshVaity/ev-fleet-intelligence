@@ -12,7 +12,7 @@ class StationDetailsData {
     required this.address,
     required this.connectorType,
     required this.powerKw,
-    required this.pricePerKwh,
+    this.pricePerKwh,
     required this.isActive,
   });
 
@@ -23,7 +23,7 @@ class StationDetailsData {
   final String address;
   final String connectorType;
   final double powerKw;
-  final double pricePerKwh;
+  final double? pricePerKwh;
   final bool isActive;
 }
 
@@ -258,7 +258,9 @@ class StationDetailsScreen extends StatelessWidget {
                       icon: Icons.currency_rupee_rounded,
                       label: 'Price per kWh',
                       value:
-                          '₹${station.pricePerKwh.toStringAsFixed(2)}',
+                          station.pricePerKwh == null
+                              ? 'Free'
+                              : '₹${station.pricePerKwh!.toStringAsFixed(2)}',
                     ),
                     const Divider(height: 1, indent: 16, endIndent: 16),
                     _DetailRow(

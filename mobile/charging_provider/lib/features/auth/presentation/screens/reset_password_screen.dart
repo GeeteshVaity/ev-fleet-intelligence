@@ -1,4 +1,3 @@
-
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -13,18 +12,15 @@ class ResetPasswordScreen extends StatefulWidget {
     this.isLoading = false,
   });
 
-  final void Function({
-    required String code,
-    required String newPassword,
-  }) onResetPassword;
+  final void Function({required String code, required String newPassword})
+  onResetPassword;
 
   final VoidCallback onResendCode;
   final VoidCallback onBack;
   final bool isLoading;
 
   @override
-  State<ResetPasswordScreen> createState() =>
-      _ResetPasswordScreenState();
+  State<ResetPasswordScreen> createState() => _ResetPasswordScreenState();
 }
 
 class _ResetPasswordScreenState extends State<ResetPasswordScreen> {
@@ -44,11 +40,9 @@ class _ResetPasswordScreenState extends State<ResetPasswordScreen> {
 
   bool get _hasMinLength => _passwordController.text.length >= 8;
 
-  bool get _hasUppercase =>
-      RegExp(r'[A-Z]').hasMatch(_passwordController.text);
+  bool get _hasUppercase => RegExp(r'[A-Z]').hasMatch(_passwordController.text);
 
-  bool get _hasNumber =>
-      RegExp(r'[0-9]').hasMatch(_passwordController.text);
+  bool get _hasNumber => RegExp(r'[0-9]').hasMatch(_passwordController.text);
 
   bool get _hasSpecialCharacter =>
       RegExp(r'[^A-Za-z0-9]').hasMatch(_passwordController.text);
@@ -57,15 +51,9 @@ class _ResetPasswordScreenState extends State<ResetPasswordScreen> {
   void initState() {
     super.initState();
 
-    _otpControllers = List.generate(
-      6,
-      (_) => TextEditingController(),
-    );
+    _otpControllers = List.generate(6, (_) => TextEditingController());
 
-    _otpFocusNodes = List.generate(
-      6,
-      (_) => FocusNode(),
-    );
+    _otpFocusNodes = List.generate(6, (_) => FocusNode());
   }
 
   @override
@@ -99,10 +87,10 @@ class _ResetPasswordScreenState extends State<ResetPasswordScreen> {
         Text(
           label,
           style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                color: fulfilled
-                    ? AppColors.success
-                    : Theme.of(context).colorScheme.onSurfaceVariant,
-              ),
+            color: fulfilled
+                ? AppColors.success
+                : Theme.of(context).colorScheme.onSurfaceVariant,
+          ),
         ),
       ],
     );
@@ -120,10 +108,7 @@ class _ResetPasswordScreenState extends State<ResetPasswordScreen> {
 
     if (!_formKey.currentState!.validate()) return;
 
-    widget.onResetPassword(
-      code: _otp,
-      newPassword: _passwordController.text,
-    );
+    widget.onResetPassword(code: _otp, newPassword: _passwordController.text);
   }
 
   @override
@@ -137,18 +122,12 @@ class _ResetPasswordScreenState extends State<ResetPasswordScreen> {
           onPressed: widget.onBack,
           icon: const Icon(Icons.arrow_back_rounded),
         ),
-        title: Text(
-          'Back',
-          style: theme.textTheme.bodyMedium,
-        ),
+        title: Text('Back', style: theme.textTheme.bodyMedium),
       ),
       body: SafeArea(
         child: Center(
           child: SingleChildScrollView(
-            padding: const EdgeInsets.symmetric(
-              horizontal: 24,
-              vertical: 20,
-            ),
+            padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 20),
             child: ConstrainedBox(
               constraints: const BoxConstraints(maxWidth: 420),
               child: Form(
@@ -211,9 +190,7 @@ class _ResetPasswordScreenState extends State<ResetPasswordScreen> {
                       children: List.generate(6, (index) {
                         return Expanded(
                           child: Padding(
-                            padding: EdgeInsets.only(
-                              right: index == 5 ? 0 : 8,
-                            ),
+                            padding: EdgeInsets.only(right: index == 5 ? 0 : 8),
                             child: SizedBox(
                               height: 56,
                               child: TextField(
@@ -250,11 +227,9 @@ class _ResetPasswordScreenState extends State<ResetPasswordScreen> {
                                 ),
                                 onChanged: (value) {
                                   if (value.isNotEmpty && index < 5) {
-                                    _otpFocusNodes[index + 1]
-                                        .requestFocus();
+                                    _otpFocusNodes[index + 1].requestFocus();
                                   } else if (value.isEmpty && index > 0) {
-                                    _otpFocusNodes[index - 1]
-                                        .requestFocus();
+                                    _otpFocusNodes[index - 1].requestFocus();
                                   }
 
                                   if (index == 5 && value.isNotEmpty) {
@@ -278,10 +253,7 @@ class _ResetPasswordScreenState extends State<ResetPasswordScreen> {
                       children: [
                         TextButton.icon(
                           onPressed: widget.onResendCode,
-                          icon: const Icon(
-                            Icons.refresh_rounded,
-                            size: 16,
-                          ),
+                          icon: const Icon(Icons.refresh_rounded, size: 16),
                           label: const Text('Resend Code'),
                         ),
                       ],
@@ -290,10 +262,7 @@ class _ResetPasswordScreenState extends State<ResetPasswordScreen> {
                     const SizedBox(height: 24),
 
                     // New password
-                    Text(
-                      'New Password',
-                      style: theme.textTheme.labelLarge,
-                    ),
+                    Text('New Password', style: theme.textTheme.labelLarge),
 
                     const SizedBox(height: 8),
 
@@ -301,15 +270,11 @@ class _ResetPasswordScreenState extends State<ResetPasswordScreen> {
                       controller: _passwordController,
                       obscureText: _obscurePassword,
                       textInputAction: TextInputAction.next,
-                      autofillHints: const [
-                        AutofillHints.newPassword,
-                      ],
+                      autofillHints: const [AutofillHints.newPassword],
                       onChanged: (_) => setState(() {}),
                       decoration: InputDecoration(
                         hintText: 'Enter your new password',
-                        prefixIcon: const Icon(
-                          Icons.lock_outline_rounded,
-                        ),
+                        prefixIcon: const Icon(Icons.lock_outline_rounded),
                         suffixIcon: IconButton(
                           onPressed: () {
                             setState(() {
@@ -349,10 +314,7 @@ class _ResetPasswordScreenState extends State<ResetPasswordScreen> {
                           spacing: 16,
                           runSpacing: 10,
                           children: [
-                            _buildPasswordRule(
-                              '8+ characters',
-                              _hasMinLength,
-                            ),
+                            _buildPasswordRule('8+ characters', _hasMinLength),
                             _buildPasswordRule(
                               'Uppercase letter',
                               _hasUppercase,
@@ -373,10 +335,7 @@ class _ResetPasswordScreenState extends State<ResetPasswordScreen> {
                     const SizedBox(height: 22),
 
                     // Confirm password
-                    Text(
-                      'Confirm Password',
-                      style: theme.textTheme.labelLarge,
-                    ),
+                    Text('Confirm Password', style: theme.textTheme.labelLarge),
 
                     const SizedBox(height: 8),
 
@@ -386,9 +345,7 @@ class _ResetPasswordScreenState extends State<ResetPasswordScreen> {
                       textInputAction: TextInputAction.done,
                       decoration: InputDecoration(
                         hintText: 'Confirm your new password',
-                        prefixIcon: const Icon(
-                          Icons.lock_outline_rounded,
-                        ),
+                        prefixIcon: const Icon(Icons.lock_outline_rounded),
                         suffixIcon: IconButton(
                           onPressed: () {
                             setState(() {
@@ -422,8 +379,7 @@ class _ResetPasswordScreenState extends State<ResetPasswordScreen> {
                     SizedBox(
                       height: 52,
                       child: ElevatedButton(
-                        onPressed:
-                            widget.isLoading ? null : _handleReset,
+                        onPressed: widget.isLoading ? null : _handleReset,
                         child: widget.isLoading
                             ? const SizedBox(
                                 height: 22,
@@ -438,10 +394,7 @@ class _ResetPasswordScreenState extends State<ResetPasswordScreen> {
                                 children: [
                                   Text('Reset Password'),
                                   SizedBox(width: 8),
-                                  Icon(
-                                    Icons.arrow_forward_rounded,
-                                    size: 19,
-                                  ),
+                                  Icon(Icons.arrow_forward_rounded, size: 19),
                                 ],
                               ),
                       ),

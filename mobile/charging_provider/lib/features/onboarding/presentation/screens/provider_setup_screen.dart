@@ -1,4 +1,3 @@
-
 import 'package:flutter/material.dart';
 
 import '../../../../core/theme/app_colors.dart';
@@ -11,19 +10,19 @@ class ProviderSetupScreen extends StatefulWidget {
     this.isLoading = false,
   });
 
-  final void Function({
+  final Future<void> Function({
     required String providerType,
     required String legalName,
     required String phone,
     required String address,
-  }) onContinue;
+  })
+  onContinue;
 
   final VoidCallback onBack;
   final bool isLoading;
 
   @override
-  State<ProviderSetupScreen> createState() =>
-      _ProviderSetupScreenState();
+  State<ProviderSetupScreen> createState() => _ProviderSetupScreenState();
 }
 
 class _ProviderSetupScreenState extends State<ProviderSetupScreen> {
@@ -51,7 +50,8 @@ class _ProviderSetupScreenState extends State<ProviderSetupScreen> {
     {
       'value': 'FLEET_OPERATOR',
       'title': 'Fleet Operator',
-      'description': 'Fleet depots, logistics hubs and private charging facilities.',
+      'description':
+          'Fleet depots, logistics hubs and private charging facilities.',
       'icon': Icons.local_shipping_rounded,
     },
   ];
@@ -64,22 +64,20 @@ class _ProviderSetupScreenState extends State<ProviderSetupScreen> {
     super.dispose();
   }
 
-  void _handleContinue() {
+  Future<void> _handleContinue() async {
     if (_selectedProvider == null) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Please select your provider type.'),
-        ),
+        const SnackBar(content: Text('Please select your provider type.')),
       );
       return;
     }
 
     if (!_formKey.currentState!.validate()) return;
 
-    widget.onContinue(
+    await widget.onContinue(
       providerType: _selectedProvider!,
       legalName: _legalNameController.text.trim(),
-      phone: _phoneController.text.trim(),
+      phone: '+91${_phoneController.text.trim()}',
       address: _addressController.text.trim(),
     );
   }
@@ -110,9 +108,7 @@ class _ProviderSetupScreenState extends State<ProviderSetupScreen> {
               : colors.surface,
           borderRadius: BorderRadius.circular(14),
           border: Border.all(
-            color: isSelected
-                ? AppColors.secondary
-                : theme.dividerColor,
+            color: isSelected ? AppColors.secondary : theme.dividerColor,
             width: isSelected ? 1.5 : 1,
           ),
         ),
@@ -125,11 +121,7 @@ class _ProviderSetupScreenState extends State<ProviderSetupScreen> {
                 color: colors.surfaceContainerHighest,
                 borderRadius: BorderRadius.circular(10),
               ),
-              child: Icon(
-                icon,
-                color: colors.onSurface,
-                size: 22,
-              ),
+              child: Icon(icon, color: colors.onSurface, size: 22),
             ),
             const SizedBox(width: 12),
             Expanded(
@@ -154,12 +146,8 @@ class _ProviderSetupScreenState extends State<ProviderSetupScreen> {
             ),
             const SizedBox(width: 8),
             Icon(
-              isSelected
-                  ? Icons.check_circle
-                  : Icons.circle_outlined,
-              color: isSelected
-                  ? AppColors.success
-                  : colors.onSurfaceVariant,
+              isSelected ? Icons.check_circle : Icons.circle_outlined,
+              color: isSelected ? AppColors.success : colors.onSurfaceVariant,
             ),
           ],
         ),
@@ -178,18 +166,12 @@ class _ProviderSetupScreenState extends State<ProviderSetupScreen> {
           onPressed: widget.onBack,
           icon: const Icon(Icons.arrow_back_rounded),
         ),
-        title: Text(
-          'Provider Setup',
-          style: theme.textTheme.titleMedium,
-        ),
+        title: Text('Provider Setup', style: theme.textTheme.titleMedium),
       ),
       body: SafeArea(
         child: Center(
           child: SingleChildScrollView(
-            padding: const EdgeInsets.symmetric(
-              horizontal: 20,
-              vertical: 16,
-            ),
+            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
             child: ConstrainedBox(
               constraints: const BoxConstraints(maxWidth: 480),
               child: Form(
@@ -225,9 +207,7 @@ class _ProviderSetupScreenState extends State<ProviderSetupScreen> {
                         value: 0.66,
                         minHeight: 6,
                         backgroundColor: AppColors.neutral200,
-                        valueColor: AlwaysStoppedAnimation(
-                          AppColors.primary,
-                        ),
+                        valueColor: AlwaysStoppedAnimation(AppColors.primary),
                       ),
                     ),
 
@@ -324,8 +304,7 @@ class _ProviderSetupScreenState extends State<ProviderSetupScreen> {
                         if (value == null || value.trim().isEmpty) {
                           return 'Please enter your phone number';
                         }
-                        if (!RegExp(r'^[6-9]\d{9}$')
-                            .hasMatch(value.trim())) {
+                        if (!RegExp(r'^[6-9]\d{9}$').hasMatch(value.trim())) {
                           return 'Enter a valid 10-digit number';
                         }
                         return null;
@@ -366,9 +345,7 @@ class _ProviderSetupScreenState extends State<ProviderSetupScreen> {
                     SizedBox(
                       height: 52,
                       child: ElevatedButton(
-                        onPressed: widget.isLoading
-                            ? null
-                            : _handleContinue,
+                        onPressed: widget.isLoading ? null : _handleContinue,
                         child: widget.isLoading
                             ? const SizedBox(
                                 height: 22,
@@ -383,10 +360,7 @@ class _ProviderSetupScreenState extends State<ProviderSetupScreen> {
                                 children: [
                                   Text('Continue'),
                                   SizedBox(width: 8),
-                                  Icon(
-                                    Icons.arrow_forward_rounded,
-                                    size: 18,
-                                  ),
+                                  Icon(Icons.arrow_forward_rounded, size: 18),
                                 ],
                               ),
                       ),

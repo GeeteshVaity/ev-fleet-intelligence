@@ -1,4 +1,3 @@
-
 import 'dart:async';
 
 import 'package:flutter/material.dart';
@@ -39,15 +38,9 @@ class _VerifyEmailScreenState extends State<VerifyEmailScreen> {
   void initState() {
     super.initState();
 
-    _controllers = List.generate(
-      6,
-      (_) => TextEditingController(),
-    );
+    _controllers = List.generate(6, (_) => TextEditingController());
 
-    _focusNodes = List.generate(
-      6,
-      (_) => FocusNode(),
-    );
+    _focusNodes = List.generate(6, (_) => FocusNode());
 
     _startTimer();
   }
@@ -70,25 +63,21 @@ class _VerifyEmailScreenState extends State<VerifyEmailScreen> {
   void _startTimer() {
     _timer?.cancel();
 
-    _timer = Timer.periodic(
-      const Duration(seconds: 1),
-      (timer) {
-        if (_remainingSeconds <= 0) {
-          timer.cancel();
-          return;
-        }
+    _timer = Timer.periodic(const Duration(seconds: 1), (timer) {
+      if (_remainingSeconds <= 0) {
+        timer.cancel();
+        return;
+      }
 
-        if (mounted) {
-          setState(() {
-            _remainingSeconds--;
-          });
-        }
-      },
-    );
+      if (mounted) {
+        setState(() {
+          _remainingSeconds--;
+        });
+      }
+    });
   }
 
-  String get _otp =>
-      _controllers.map((controller) => controller.text).join();
+  String get _otp => _controllers.map((controller) => controller.text).join();
 
   void _handleVerify() {
     if (_otp.length != 6) {
@@ -131,16 +120,11 @@ class _VerifyEmailScreenState extends State<VerifyEmailScreen> {
     final colors = theme.colorScheme;
 
     return Scaffold(
-      appBar: AppBar(
-        leading: const BackButton(),
-      ),
+      appBar: AppBar(leading: const BackButton()),
       body: SafeArea(
         child: Center(
           child: SingleChildScrollView(
-            padding: const EdgeInsets.symmetric(
-              horizontal: 24,
-              vertical: 24,
-            ),
+            padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 24),
             child: ConstrainedBox(
               constraints: const BoxConstraints(maxWidth: 420),
               child: Column(
@@ -269,9 +253,7 @@ class _VerifyEmailScreenState extends State<VerifyEmailScreen> {
                     children: List.generate(6, (index) {
                       return Expanded(
                         child: Padding(
-                          padding: EdgeInsets.only(
-                            right: index == 5 ? 0 : 8,
-                          ),
+                          padding: EdgeInsets.only(right: index == 5 ? 0 : 8),
                           child: SizedBox(
                             height: 58,
                             child: TextField(
@@ -357,8 +339,7 @@ class _VerifyEmailScreenState extends State<VerifyEmailScreen> {
                   // Resend button
                   Center(
                     child: TextButton(
-                      onPressed:
-                          _remainingSeconds == 0 ? _handleResend : null,
+                      onPressed: _remainingSeconds == 0 ? _handleResend : null,
                       child: const Text('Resend Verification Code'),
                     ),
                   ),
@@ -384,10 +365,7 @@ class _VerifyEmailScreenState extends State<VerifyEmailScreen> {
                               children: [
                                 Text('Verify Email'),
                                 SizedBox(width: 8),
-                                Icon(
-                                  Icons.arrow_forward_rounded,
-                                  size: 19,
-                                ),
+                                Icon(Icons.arrow_forward_rounded, size: 19),
                               ],
                             ),
                     ),

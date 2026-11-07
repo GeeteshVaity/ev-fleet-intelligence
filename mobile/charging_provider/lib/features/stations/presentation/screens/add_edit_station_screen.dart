@@ -290,7 +290,7 @@ class _AddEditStationScreenState extends State<AddEditStationScreen> {
       children: [
         _fieldLabel(context, label),
         DropdownButtonFormField<String>(
-          value: value,
+          initialValue: value,
           isExpanded: true,
           decoration: const InputDecoration(),
           items: options.map((option) {

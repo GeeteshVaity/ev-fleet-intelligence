@@ -414,7 +414,7 @@ Readable by the booking's seeker or the station owner.
 { "energyConsumedKwh": 18.4, "finalCost": 266.80 }
 ```
 
-Requires `IN_PROGRESS` (`409` otherwise), `energyConsumedKwh >= 0` (`400` otherwise). Sets `actualEndTime = now` and `status = "COMPLETED"`.
+Requires `IN_PROGRESS` (`409` otherwise), `energyConsumedKwh > 0` (`400` otherwise). The server calculates `finalCost` from measured energy and the station's `pricePerKwh`; client-supplied `finalCost` is ignored. Sets `actualEndTime = now` and `status = "COMPLETED"`.
 
 ```json
 {
@@ -432,18 +432,22 @@ Requires `IN_PROGRESS` (`409` otherwise), `energyConsumedKwh >= 0` (`400` otherw
 
 ## 8. Station images
 
-The database records image metadata; **binary upload to S3 is not implemented**. No AWS credentials or bucket are configured anywhere in the application.
+When S3 is enabled, the backend issues short-lived presigned PUT URLs. The
+runtime uses its AWS workload role; credentials are never sent to the client.
 
 | Method | Path | Auth | Result |
 |---|---|---|---|
 | GET | `/api/stations/{stationId}/images` | authenticated | `200` list of stored rows |
-| POST | `/api/stations/{stationId}/images/upload-url` | owner | **[NOT IMPLEMENTED]** `501` — previously returned a fabricated local URL and object key |
+| POST | `/api/stations/{stationId}/images/upload-url` | owner | `{ "objectKey", "uploadUrl", "expiresAt" }`; request body must contain `contentType` (`image/jpeg`, `image/png`, or `image/webp`) |
 | POST | `/api/stations/{stationId}/images` | owner | `201` with `{ "s3ObjectKey": "..." }`; `400` when blank |
 | DELETE | `/api/stations/{stationId}/images/{imageId}` | owner | `204` |
 
-Because `POST /images` accepts any key without verifying the object exists, a row can reference a missing S3 object. Intended contract for a future implementation:
+Upload lifecycle:
 
-1. `POST /upload-url` returns `{ "uploadUrl": "<presigned PUT>", "s3ObjectKey": "<key>", "expiresIn": 300 }`.
+1. Call `POST /upload-url` with the exact image content type.
+2. Upload the bytes with HTTP `PUT` to `uploadUrl`, preserving the returned
+   `Content-Type`.
+3. Call `POST /images` with the returned `objectKey` to persist metadata.
 2. The client `PUT`s the bytes directly to `uploadUrl`.
 3. The client `POST /images` with the returned key to persist metadata.
 

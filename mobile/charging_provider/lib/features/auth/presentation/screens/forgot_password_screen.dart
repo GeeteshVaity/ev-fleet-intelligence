@@ -1,4 +1,3 @@
-
 import 'package:flutter/material.dart';
 
 import '../../../../core/theme/app_colors.dart';
@@ -11,13 +10,12 @@ class ForgotPasswordScreen extends StatefulWidget {
     this.isLoading = false,
   });
 
-  final ValueChanged<String> onSendResetCode;
+  final Future<void> Function(String email) onSendResetCode;
   final VoidCallback onBackToLogin;
   final bool isLoading;
 
   @override
-  State<ForgotPasswordScreen> createState() =>
-      _ForgotPasswordScreenState();
+  State<ForgotPasswordScreen> createState() => _ForgotPasswordScreenState();
 }
 
 class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
@@ -30,10 +28,12 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
     super.dispose();
   }
 
-  void _handleSubmit() {
-    if (_formKey.currentState!.validate()) {
-      widget.onSendResetCode(_emailController.text.trim());
-    }
+  Future<void> _handleSubmit() async {
+    if (!_formKey.currentState!.validate()) return;
+
+    await widget.onSendResetCode(
+      _emailController.text.trim(),
+    );
   }
 
   @override
@@ -47,18 +47,12 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
           onPressed: widget.onBackToLogin,
           icon: const Icon(Icons.arrow_back_rounded),
         ),
-        title: Text(
-          'Back to Login',
-          style: theme.textTheme.bodyMedium,
-        ),
+        title: Text('Back to Login', style: theme.textTheme.bodyMedium),
       ),
       body: SafeArea(
         child: Center(
           child: SingleChildScrollView(
-            padding: const EdgeInsets.symmetric(
-              horizontal: 24,
-              vertical: 24,
-            ),
+            padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 24),
             child: ConstrainedBox(
               constraints: const BoxConstraints(maxWidth: 420),
               child: Form(
@@ -130,25 +124,19 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
                               controller: _emailController,
                               keyboardType: TextInputType.emailAddress,
                               textInputAction: TextInputAction.done,
-                              autofillHints: const [
-                                AutofillHints.email,
-                              ],
+                              autofillHints: const [AutofillHints.email],
                               onFieldSubmitted: (_) => _handleSubmit(),
                               decoration: const InputDecoration(
                                 hintText: 'Enter your email address',
-                                prefixIcon: Icon(
-                                  Icons.mail_outline_rounded,
-                                ),
+                                prefixIcon: Icon(Icons.mail_outline_rounded),
                               ),
                               validator: (value) {
-                                if (value == null ||
-                                    value.trim().isEmpty) {
+                                if (value == null || value.trim().isEmpty) {
                                   return 'Please enter your email';
                                 }
 
-                                if (!RegExp(
-                                  r'^[^@\s]+@[^@\s]+\.[^@\s]+$',
-                                ).hasMatch(value.trim())) {
+                                if (!RegExp(r'^[^@\s]+@[^@\s]+\.[^@\s]+$')
+                                    .hasMatch(value.trim())) {
                                   return 'Enter a valid email address';
                                 }
 

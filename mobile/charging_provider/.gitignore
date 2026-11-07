@@ -33,6 +33,10 @@ migrate_working_dir/
 /build/
 /coverage/
 
+# Local deployment configuration
+/env/production.json
+/env/*.local.json
+
 # Symbolication related
 app.*.symbols
 

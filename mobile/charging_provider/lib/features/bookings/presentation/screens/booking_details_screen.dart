@@ -17,6 +17,10 @@ class BookingDetailsData {
     required this.estimatedCost,
     this.vehicleDetails,
     this.vehicleId,
+    this.isSessionStarted = false,
+    this.sessionStatus,
+    this.finalCost,
+    this.energyConsumedKwh,
   });
 
   final String id;
@@ -34,6 +38,10 @@ class BookingDetailsData {
 
   final String? vehicleDetails;
   final String? vehicleId;
+  final bool isSessionStarted;
+  final String? sessionStatus;
+  final double? finalCost;
+  final double? energyConsumedKwh;
 }
 
 class BookingDetailsScreen extends StatelessWidget {
@@ -61,6 +69,13 @@ class BookingDetailsScreen extends StatelessWidget {
 
   bool get _isConfirmed =>
       booking.status.toUpperCase() == 'CONFIRMED';
+
+  bool get _isSessionCompleted =>
+    booking.sessionStatus?.toUpperCase() == 'COMPLETED';
+
+  bool get _isSessionInProgress =>
+    booking.isSessionStarted ||
+    booking.sessionStatus?.toUpperCase() == 'IN_PROGRESS';
 
   Color _statusColor() {
     switch (booking.status.toUpperCase()) {
@@ -381,14 +396,48 @@ class BookingDetailsScreen extends StatelessWidget {
                           ),
                         ],
                       ),
-                      const SizedBox(height: 8),
-                      Text(
-                        'Final cost may differ based on the completed '
-                        'charging session.',
-                        style: theme.textTheme.bodySmall?.copyWith(
-                          color: colors.onSurfaceVariant,
+
+                      if (_isSessionCompleted) ...[
+                        const Divider(height: 24),
+
+                        if (booking.energyConsumedKwh != null)
+                          _InfoRow(
+                            icon: Icons.bolt_rounded,
+                            label: 'Energy Consumed',
+                            value: '${booking.energyConsumedKwh!.toStringAsFixed(2)} kWh',
+                          ),
+
+                        if (booking.finalCost != null) ...[
+                          const SizedBox(height: 12),
+                          Row(
+                            children: [
+                              Expanded(
+                                child: Text(
+                                  'Final Bill',
+                                  style: theme.textTheme.titleMedium?.copyWith(
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                ),
+                              ),
+                              Text(
+                                '₹${booking.finalCost!.toStringAsFixed(2)}',
+                                style: theme.textTheme.titleLarge?.copyWith(
+                                  color: AppColors.success,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ],
+                      ] else ...[
+                        const SizedBox(height: 8),
+                        Text(
+                          'Final cost may differ based on the completed charging session.',
+                          style: theme.textTheme.bodySmall?.copyWith(
+                            color: colors.onSurfaceVariant,
+                          ),
                         ),
-                      ),
+                      ],
                     ],
                   ),
                 ),
@@ -447,7 +496,7 @@ class BookingDetailsScreen extends StatelessWidget {
               ],
 
               // Confirmed booking action
-              if (_isConfirmed)
+              if (_isConfirmed && !_isSessionCompleted)
                 SizedBox(
                   width: double.infinity,
                   height: 52,
@@ -456,20 +505,72 @@ class BookingDetailsScreen extends StatelessWidget {
                         ? null
                         : () => _confirmAction(
                               context: context,
-                              title: 'Start Charging Session?',
-                              message:
-                                  'Start a charging session for this '
-                                  'confirmed booking?',
-                              actionLabel: 'Start Session',
+                              title: _isSessionInProgress
+                                  ? 'Complete Charging Session?'
+                                  : 'Start Charging Session?',
+                              message: _isSessionInProgress
+                                  ? 'Are you sure you want to complete this charging session?'
+                                  : 'Start a charging session for this confirmed booking?',
+                              actionLabel: _isSessionInProgress
+                                  ? 'Complete Session'
+                                  : 'Start Session',
                               onConfirm: onStartSession,
                             ),
-                    icon: const Icon(Icons.bolt_rounded),
-                    label: const Text('Start Charging Session'),
+                    icon: Icon(
+                      _isSessionInProgress
+                          ? Icons.stop_circle_outlined
+                          : Icons.bolt_rounded,
+                    ),
+                    label: Text(
+                      _isSessionInProgress
+                          ? 'Complete Charging Session'
+                          : 'Start Charging Session',
+                    ),
                   ),
                 ),
 
+                // Completed charging session
+                if (_isSessionCompleted)
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.all(16),
+                    decoration: BoxDecoration(
+                      color: AppColors.success.withValues(alpha: 0.12),
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(
+                        color: AppColors.success.withValues(alpha: 0.35),
+                      ),
+                    ),
+                    child: Column(
+                      children: [
+                        const Icon(
+                          Icons.check_circle_rounded,
+                          color: AppColors.success,
+                          size: 32,
+                        ),
+                        const SizedBox(height: 8),
+                        Text(
+                          'Charging Session Completed',
+                          style: theme.textTheme.titleSmall?.copyWith(
+                            color: AppColors.success,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          'This charging session has been completed. '
+                          'No further session actions are available.',
+                          textAlign: TextAlign.center,
+                          style: theme.textTheme.bodySmall?.copyWith(
+                            color: colors.onSurfaceVariant,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+
               // Terminal booking status
-              if (!_isPending && !_isConfirmed)
+              if (!_isPending && !_isConfirmed && !_isSessionCompleted)
                 Container(
                   width: double.infinity,
                   padding: const EdgeInsets.all(14),

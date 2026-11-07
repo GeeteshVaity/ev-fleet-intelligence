@@ -30,14 +30,20 @@ class MyStationsScreen extends StatefulWidget {
     super.key,
     required this.stations,
     required this.onOpenStation,
+    required this.onManageAvailability,
     required this.onAddStation,
     required this.onNavigationChanged,
+    required this.onToggleStation,
+    required this.onDeactivateStation,
   });
 
   final List<ProviderStationSummary> stations;
   final ValueChanged<String> onOpenStation;
+  final ValueChanged<String> onManageAvailability;
   final VoidCallback onAddStation;
   final ValueChanged<int> onNavigationChanged;
+  final void Function(String id, bool active) onToggleStation;
+  final ValueChanged<String> onDeactivateStation;
 
   @override
   State<MyStationsScreen> createState() => _MyStationsScreenState();
@@ -299,8 +305,14 @@ class _MyStationsScreenState extends State<MyStationsScreen> {
 
                           return _StationCard(
                             station: station,
-                            onTap: () =>
-                                widget.onOpenStation(station.id),
+                            onTap: () => widget.onOpenStation(station.id),
+                            onManageAvailability: () =>
+                                widget.onManageAvailability(station.id),
+                            onToggle: () => widget.onToggleStation(
+                              station.id,
+                              !station.isActive,
+                            ),
+                            onDeactivate: () => widget.onDeactivateStation(station.id),
                           );
                         },
                       ),
@@ -398,10 +410,16 @@ class _StationCard extends StatelessWidget {
   const _StationCard({
     required this.station,
     required this.onTap,
+    required this.onManageAvailability,
+    required this.onToggle,
+    required this.onDeactivate,
   });
 
   final ProviderStationSummary station;
   final VoidCallback onTap;
+  final VoidCallback onManageAvailability;
+  final VoidCallback onToggle;
+  final VoidCallback onDeactivate;
 
   @override
   Widget build(BuildContext context) {
@@ -479,6 +497,37 @@ class _StationCard extends StatelessWidget {
                       ),
                     ],
                   ),
+
+                  PopupMenuButton<String>(
+                    tooltip: 'Station actions',
+                    onSelected: (value) {
+                      if (value == 'toggle') {
+                        onToggle();
+                      } else if (value == 'availability') {
+                        onManageAvailability();
+                      } else if (value == 'deactivate') {
+                        onDeactivate();
+                      }
+                    },
+                    itemBuilder: (context) => [
+                      const PopupMenuItem(
+                        value: 'availability',
+                        child: Text('Manage availability'),
+                      ),
+                      PopupMenuItem(
+                        value: 'toggle',
+                        child: Text(
+                          station.isActive ? 'Set inactive' : 'Activate station',
+                        ),
+                      ),
+                      const PopupMenuItem(
+                        value: 'deactivate',
+                        child: Text('Deactivate station'),
+                      ),
+                    ],
+                    icon: const Icon(Icons.more_vert_rounded),
+                  ),
+
                 ],
               ),
 

@@ -1,4 +1,3 @@
-
 import 'package:flutter/material.dart';
 
 import '../../../../../core/theme/app_colors.dart';
@@ -12,7 +11,10 @@ class LoginScreen extends StatefulWidget {
     this.isLoading = false,
   });
 
-  final VoidCallback onLogin;
+  final Future<void> Function({
+  required String email,
+  required String password,
+  }) onLogin;
   final VoidCallback onForgotPassword;
   final VoidCallback onCreateAccount;
   final bool isLoading;
@@ -35,10 +37,13 @@ class _LoginScreenState extends State<LoginScreen> {
     super.dispose();
   }
 
-  void _handleLogin() {
-    if (_formKey.currentState!.validate()) {
-      widget.onLogin();
-    }
+  Future<void> _handleLogin() async {
+    if (!_formKey.currentState!.validate()) return;
+
+    await widget.onLogin(
+      email: _emailController.text.trim(),
+      password: _passwordController.text,
+    );
   }
 
   @override
@@ -50,10 +55,7 @@ class _LoginScreenState extends State<LoginScreen> {
       body: SafeArea(
         child: Center(
           child: SingleChildScrollView(
-            padding: const EdgeInsets.symmetric(
-              horizontal: 24,
-              vertical: 32,
-            ),
+            padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 32),
             child: ConstrainedBox(
               constraints: const BoxConstraints(maxWidth: 420),
               child: Form(
@@ -131,23 +133,18 @@ class _LoginScreenState extends State<LoginScreen> {
                               controller: _emailController,
                               keyboardType: TextInputType.emailAddress,
                               textInputAction: TextInputAction.next,
-                              autofillHints: const [
-                                AutofillHints.email,
-                              ],
+                              autofillHints: const [AutofillHints.email],
                               decoration: const InputDecoration(
                                 hintText: 'Enter your email',
-                                prefixIcon: Icon(
-                                  Icons.mail_outline_rounded,
-                                ),
+                                prefixIcon: Icon(Icons.mail_outline_rounded),
                               ),
                               validator: (value) {
                                 if (value == null || value.trim().isEmpty) {
                                   return 'Please enter your email';
                                 }
 
-                                if (!RegExp(
-                                  r'^[^@\s]+@[^@\s]+\.[^@\s]+$',
-                                ).hasMatch(value.trim())) {
+                                if (!RegExp(r'^[^@\s]+@[^@\s]+\.[^@\s]+$')
+                                    .hasMatch(value.trim())) {
                                   return 'Enter a valid email address';
                                 }
 
@@ -159,8 +156,7 @@ class _LoginScreenState extends State<LoginScreen> {
 
                             // Password label and forgot password
                             Row(
-                              mainAxisAlignment:
-                                  MainAxisAlignment.spaceBetween,
+                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
                               children: [
                                 Text(
                                   'Password',
@@ -186,9 +182,7 @@ class _LoginScreenState extends State<LoginScreen> {
                               controller: _passwordController,
                               obscureText: _obscurePassword,
                               textInputAction: TextInputAction.done,
-                              autofillHints: const [
-                                AutofillHints.password,
-                              ],
+                              autofillHints: const [AutofillHints.password],
                               onFieldSubmitted: (_) => _handleLogin(),
                               decoration: InputDecoration(
                                 hintText: 'Enter your password',
@@ -223,8 +217,9 @@ class _LoginScreenState extends State<LoginScreen> {
                             SizedBox(
                               height: 52,
                               child: ElevatedButton(
-                                onPressed:
-                                    widget.isLoading ? null : _handleLogin,
+                                onPressed: widget.isLoading
+                                    ? null
+                                    : _handleLogin,
                                 child: widget.isLoading
                                     ? const SizedBox(
                                         height: 22,
@@ -240,10 +235,7 @@ class _LoginScreenState extends State<LoginScreen> {
                                         children: [
                                           Text('Login to Console'),
                                           SizedBox(width: 8),
-                                          Icon(
-                                            Icons.bolt_rounded,
-                                            size: 19,
-                                          ),
+                                          Icon(Icons.bolt_rounded, size: 19),
                                         ],
                                       ),
                               ),
@@ -272,10 +264,7 @@ class _LoginScreenState extends State<LoginScreen> {
                             children: [
                               Text('Create Account'),
                               SizedBox(width: 4),
-                              Icon(
-                                Icons.arrow_forward_rounded,
-                                size: 16,
-                              ),
+                              Icon(Icons.arrow_forward_rounded, size: 16),
                             ],
                           ),
                         ),

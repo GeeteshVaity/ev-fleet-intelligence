@@ -1,19 +1,28 @@
 class AppConfig {
-  static const apiBaseUrl = String.fromEnvironment(
+  AppConfig._();
+
+  // Backend configuration
+  static const String apiBaseUrl = String.fromEnvironment(
     'API_BASE_URL',
-    defaultValue: 'http://10.0.2.2:8080',
+    defaultValue: '',
   );
 
-  static const awsRegion = String.fromEnvironment(
-    'AWS_REGION',
-    defaultValue: 'ap-south-1',
-  );
+  // Backward-compatible alias
+  static const String baseUrl = apiBaseUrl;
 
-  static const cognitoUserPoolId = String.fromEnvironment(
+  // AWS Cognito configuration
+  static const String cognitoUserPoolId = String.fromEnvironment(
     'COGNITO_USER_POOL_ID',
   );
 
-  static const cognitoAppClientId = String.fromEnvironment(
+  static const String cognitoAppClientId = String.fromEnvironment(
     'COGNITO_APP_CLIENT_ID',
   );
+
+  static const String awsRegion = String.fromEnvironment('AWS_REGION');
+
+  // Network timeouts
+  static const Duration connectTimeout = Duration(seconds: 20);
+
+  static const Duration receiveTimeout = Duration(seconds: 20);
 }
